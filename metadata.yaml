@@ -1,6 +1,6 @@
 name: astrbot_plugin_research
-display_name: Research Experiments
-desc: Persistent minimal research experiments with local harness collaboration.
+display_name: 科研最小实验
+desc: 通过本地 harness 协作完成最小科研实验，支持任务持久化与结果归档。
 version: 0.1.0
 author: AstrBot Contributors
 astrbot_version: ">=4.0.0"

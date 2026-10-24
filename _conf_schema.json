@@ -1,11 +1,11 @@
 {
   "allowed_users": {
-    "description": "Allowed identities, encoded as compact JSON [platform_id,sender_id]; AstrBot admins are also allowed",
+    "description": "允许使用插件的用户身份，以紧凑 JSON [platform_id,sender_id] 编码；AstrBot 管理员也可使用",
     "type": "list",
     "default": []
   },
   "settings_json": {
-    "description": "Research settings (participants, assignments, platforms, limits); see README.md. Store credentials outside this JSON.",
+    "description": "科研任务设置，包括参与者、阶段分工、执行平台和资源限制，详见 README.md。请勿在此 JSON 中存储凭据。",
     "type": "text",
     "editor_mode": true,
     "editor_language": "json",
