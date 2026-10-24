@@ -1,0 +1,7 @@
+name: astrbot_plugin_research
+display_name: Research Experiments
+desc: Persistent minimal research experiments with local harness collaboration.
+version: 0.1.0
+author: AstrBot Contributors
+astrbot_version: ">=4.0.0"
+repo: https://github.com/aliveriver/factory

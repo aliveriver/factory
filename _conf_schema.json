@@ -1,0 +1,14 @@
+{
+  "allowed_users": {
+    "description": "Allowed identities, encoded as compact JSON [platform_id,sender_id]; AstrBot admins are also allowed",
+    "type": "list",
+    "default": []
+  },
+  "settings_json": {
+    "description": "Research settings (participants, assignments, platforms, limits); see README.md. Store credentials outside this JSON.",
+    "type": "text",
+    "editor_mode": true,
+    "editor_language": "json",
+    "default": "{}"
+  }
+}

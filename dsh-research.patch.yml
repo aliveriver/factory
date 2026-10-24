@@ -1,0 +1,45 @@
+# Research code is returned as structured files and applied by the plugin.
+# Web tools retain DSH's public-destination validation; no shell or local tools.
+- id: sandbox-policy
+  config:
+    mode: read-only
+- id: approval
+  config:
+    policy: ask
+- id: permission
+  config:
+    defaultPreset: read-only
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-working-directory
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: workflow-ptc
+  disabled: true
+- id: ptc-runtime
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: goal-round-driver
+  disabled: true
+- id: tool-todo
+  disabled: true
