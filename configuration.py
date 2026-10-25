@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 
 from .allocation import resource_spec
+from .state import DEFAULT_LIMITS
 
 PHASES = {
     "research": "想法完善与检索",
@@ -113,8 +114,20 @@ def read_configuration(config: dict) -> tuple[dict, set[str]]:
                 raise ValueError(f"阶段分工：至少一位参与者需要负责“{PHASES[phase]}”")
 
     platform = config.get("platform", "local")
-    if platform not in {"local", "ssh", "autodl"}:
-        raise ValueError("执行平台：请选择本机、SSH 或 AutoDL")
+    if platform not in {"auto", "local", "ssh", "autodl"}:
+        raise ValueError("执行平台：请选择自动、本机、SSH 或 AutoDL")
+    routing = config.get("routing", {})
+    order = [
+        routing.get(key, default)
+        for key, default in (("first", "local"), ("second", "ssh"), ("third", "autodl"))
+    ]
+    order = [name for name in order if name != "none"]
+    if platform == "auto" and (
+        not order
+        or len(set(order)) != len(order)
+        or any(name not in {"local", "ssh", "autodl"} for name in order)
+    ):
+        raise ValueError("平台优先顺序：至少选择一个平台，且不能重复")
     local = config.get("local", {})
     ssh = deepcopy(config.get("ssh", {}))
     cloud_form = deepcopy(config.get("autodl", {}))
@@ -133,10 +146,24 @@ def read_configuration(config: dict) -> tuple[dict, set[str]]:
             if key not in {"name", "__template_key"}
         }
     platforms = {
-        "local": {"type": "local", "allow_execute": local.get("allow_execute") is True},
+        "local": {
+            "type": "local",
+            "allow_execute": local.get("allow_execute") is True,
+        },
         "ssh": {"type": "ssh", "ssh": ssh},
         "autodl": {"type": "autodl", "ssh": cloud_ssh, "autodl": cloud},
     }
+    for name, form in (("local", local), ("ssh", ssh), ("autodl", cloud)):
+        platforms[name]["agents_file"] = (
+            form.pop("agents_file", "")
+            if name != "local"
+            else form.get("agents_file", "")
+        )
+        platforms[name]["capabilities"] = (
+            form.pop("capabilities", "")
+            if name != "local"
+            else form.get("capabilities", "")
+        )
     for connection in (ssh, cloud_ssh):
         connection["allow_execute"] = connection.get("allow_execute") is True
         connection["accept_new_host_keys"] = (
@@ -185,10 +212,16 @@ def read_configuration(config: dict) -> tuple[dict, set[str]]:
                         "GPU 数量（1–4）、磁盘（0–500 GB）和地域编码"
                     ) from exc
 
-    limits = config.get("limits", {})
-    for key, value in limits.items():
+    limit_form = config.get("limits", {})
+    limits = {}
+    for key, default in DEFAULT_LIMITS.items():
+        if limit_form.get(f"unlimited_{key}") is True:
+            limits[key] = None
+            continue
+        value = limit_form.get(key, default)
         if type(value) is not int or value < 0:
             raise ValueError(f"资源限制 {key}：请填写非负整数")
+        limits[key] = value
     concurrency = config.get("concurrency", 1)
     if type(concurrency) is not int or concurrency < 1:
         raise ValueError("同时推进任务数：请填写至少为 1 的整数")
@@ -198,6 +231,7 @@ def read_configuration(config: dict) -> tuple[dict, set[str]]:
         "agents_file": config.get("agents_file", ""),
         "platform": platform,
         "platforms": platforms,
+        "platform_order": order,
         "concurrency": concurrency,
         "limits": deepcopy(limits),
     }, allowed

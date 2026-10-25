@@ -9,6 +9,7 @@ import pytest
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 from astrbot_plugin_research.configuration import PHASES, read_configuration
+from astrbot_plugin_research.state import DEFAULT_LIMITS
 from astrbot_plugin_research.tests.test_workflow import OWNER, Scenario
 
 SCHEMA = json.loads(
@@ -51,7 +52,7 @@ def test_host_default_form_is_safe_and_loadable(form):
     settings, allowed = read_configuration(form)
     assert allowed == set()
     assert settings["participants"] == {}
-    assert settings["platform"] == "local"
+    assert settings["platform"] == "auto"
     assert settings["limits"]["tokens"] == 0
     assert settings["limits"]["model_calls"] == 30
     for platform in settings["platforms"].values():
@@ -318,6 +319,42 @@ def test_only_true_boolean_grants_permissions(form):
     assert not settings["platforms"]["autodl"]["ssh"]["allow_execute"]
 
 
+def test_each_limit_has_an_independent_unlimited_switch(form):
+    original = read_configuration(form)[0]["limits"]
+    for key in DEFAULT_LIMITS:
+        form["limits"][f"unlimited_{key}"] = True
+        settings, _ = read_configuration(form)
+        assert settings["limits"] == {**original, key: None}
+        form["limits"][f"unlimited_{key}"] = False
+    form["limits"]["repair_rounds"] = 0
+    assert read_configuration(form)[0]["limits"]["repair_rounds"] == 0
+    for key in DEFAULT_LIMITS:
+        form["limits"][f"unlimited_{key}"] = True
+    assert all(
+        value is None for value in read_configuration(form)[0]["limits"].values()
+    )
+
+
+def test_priority_dropdowns_and_per_platform_rules(form):
+    form["routing"].update(first="ssh", second="local", third="none")
+    for platform in ("local", "ssh", "autodl"):
+        form[platform]["agents_file"] = f"C:/TEST/{platform}-AGENTS.md"
+        form[platform]["capabilities"] = f"TEST {platform} capability declaration"
+    before = deepcopy(dict(form))
+    settings, _ = read_configuration(form)
+    assert dict(form) == before
+    assert settings["platform_order"] == ["ssh", "local"]
+    for name, platform in settings["platforms"].items():
+        assert platform["agents_file"] == f"C:/TEST/{name}-AGENTS.md"
+        assert platform["capabilities"] == f"TEST {name} capability declaration"
+    form["routing"].update(first="local", second="local")
+    with pytest.raises(ValueError, match="不能重复"):
+        read_configuration(form)
+    form["routing"].update(first="none", second="none", third="none")
+    with pytest.raises(ValueError, match="至少选择一个平台"):
+        read_configuration(form)
+
+
 @pytest.mark.asyncio
 async def test_visual_form_drives_complete_offline_workflow(form, tmp_path):
     scenario = Scenario(tmp_path / "tasks")
@@ -326,6 +363,7 @@ async def test_visual_form_drives_complete_offline_workflow(form, tmp_path):
         member("reviewer", "deepseek", stages=["research", "design", "analyze"]),
     ]
     form["local"]["allow_execute"] = True
+    form["platform"] = "local"
     scenario.settings, _ = read_configuration(form)
     scenario.flow = scenario.new_flow()
     task = await scenario.plan()

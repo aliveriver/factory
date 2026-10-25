@@ -96,13 +96,13 @@ class RpcProcess:
         )
         await self.process.stdin.drain()
 
-    async def call(self, method: str, params: dict, timeout: float = 90) -> dict:
-        """Request a response with a finite transport deadline.
+    async def call(self, method: str, params: dict, timeout: float | None = 90) -> dict:
+        """Request a response with an optional transport deadline.
 
         Args:
             method: Protocol method name.
             params: Method-specific arguments.
-            timeout: Maximum response wait in seconds.
+            timeout: Maximum response wait in seconds, or None for no ceiling.
 
         Returns:
             Protocol result.
@@ -249,7 +249,7 @@ class CodexHarness:
             "capabilities": self.capabilities,
         }
 
-    async def turn(self, prompt: str, timeout: float) -> dict:
+    async def turn(self, prompt: str, timeout: float | None) -> dict:
         """Continue the current session and await its correlated completion.
 
         Args:
@@ -467,7 +467,7 @@ class DeepSeekHarness:
             "capabilities": self.capabilities,
         }
 
-    async def turn(self, prompt: str, timeout: float) -> dict:
+    async def turn(self, prompt: str, timeout: float | None) -> dict:
         """Submit another prompt to the same ACP session.
 
         Args:

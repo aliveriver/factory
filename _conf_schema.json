@@ -217,36 +217,108 @@
     }
   },
   "agents_file": {
-    "description": "④ 用户 AGENTS.md 文件（可选）",
+    "description": "④ 所有平台共用的 AGENTS.md（可选）",
     "type": "string",
     "default": "",
-    "hint": "填写已有约束文件的绝对路径，Windows 可直接填写 C:/research/AGENTS.md，无需双反斜杠。文件由你维护；实验目标、方案、分工、指标另存任务文档。"
+    "hint": "填写本机已有文件路径。共用规则对所有平台生效；每个平台还可在对应设置组指定独立规则文件。任务目标、方案、分工和指标另存任务文档。"
   },
   "platform": {
-    "description": "⑤ 实验执行平台",
+    "description": "⑤ 实验平台选择方式",
     "type": "string",
-    "default": "local",
-    "hint": "选择后显示对应设置组。切换平台会保留其他组的设置；保存表单不会联网或运行实验。",
+    "default": "auto",
+    "hint": "自动模式先评估实验需求，再按下方顺序选择第一个适用平台；方案中展示理由。前序平台能力不明时会询问，不直接跳到付费资源。所有 harness 始终在本机运行，远端只运行实验。",
     "options": [
+      "auto",
       "local",
       "ssh",
       "autodl"
     ],
     "labels": [
-      "本机运行",
-      "已有 SSH 服务器",
-      "AutoDL 云实例"
+      "自动：根据实验需求按优先顺序选择",
+      "固定使用本机",
+      "固定使用 SSH 服务器",
+      "固定使用 AutoDL"
     ],
     "obvious_hint": true
+  },
+  "routing": {
+    "description": "自动选择：平台优先顺序",
+    "type": "object",
+    "condition": {
+      "platform": "auto"
+    },
+    "hint": "可以调换顺序或排除平台，不能重复。仅影响新任务；已有运行或已分配实例不自动换平台。",
+    "items": {
+      "first": {
+        "description": "第一优先",
+        "type": "string",
+        "default": "local",
+        "options": [
+          "local",
+          "ssh",
+          "autodl",
+          "none"
+        ],
+        "labels": [
+          "本机",
+          "SSH 服务器",
+          "AutoDL",
+          "不使用该顺位"
+        ]
+      },
+      "second": {
+        "description": "第二优先",
+        "type": "string",
+        "default": "ssh",
+        "options": [
+          "local",
+          "ssh",
+          "autodl",
+          "none"
+        ],
+        "labels": [
+          "本机",
+          "SSH 服务器",
+          "AutoDL",
+          "不使用该顺位"
+        ]
+      },
+      "third": {
+        "description": "第三优先",
+        "type": "string",
+        "default": "autodl",
+        "options": [
+          "local",
+          "ssh",
+          "autodl",
+          "none"
+        ],
+        "labels": [
+          "本机",
+          "SSH 服务器",
+          "AutoDL",
+          "不使用该顺位"
+        ]
+      }
+    }
   },
   "local": {
     "description": "本机执行设置",
     "type": "object",
-    "condition": {
-      "platform": "local"
-    },
     "hint": "",
     "items": {
+      "capabilities": {
+        "description": "本机能力与环境说明（供平台选择判断）",
+        "type": "text",
+        "default": "",
+        "hint": "填写已确认的 GPU/显存、内存、Python/依赖、数据位置及限制。不了解的部分写未知，不填凭据。自动选择不会擅自探测远端；本机另提供操作系统、CPU、总内存和 Python 的只读快照。"
+      },
+      "agents_file": {
+        "description": "本机专用 AGENTS.md（本机文件路径，可选）",
+        "type": "string",
+        "default": "",
+        "hint": "填写保存在本机、由你维护的规则文件。选中该平台后，与通用约束一起传给本机的所有 harness；不会在远端安装 harness，也不会创建或覆盖远端 AGENTS.md。"
+      },
       "allow_execute": {
         "description": "允许本机执行已批准的实验",
         "type": "bool",
@@ -258,11 +330,20 @@
   "ssh": {
     "description": "已有 SSH 服务器设置",
     "type": "object",
-    "condition": {
-      "platform": "ssh"
-    },
     "hint": "",
     "items": {
+      "capabilities": {
+        "description": "SSH 服务器能力与环境说明（供平台选择判断）",
+        "type": "text",
+        "default": "",
+        "hint": "填写已确认的 GPU/显存、内存、Python/依赖、数据位置及限制。不了解的部分写未知，不填凭据。自动选择不会擅自探测远端；本机另提供操作系统、CPU、总内存和 Python 的只读快照。"
+      },
+      "agents_file": {
+        "description": "SSH 服务器专用 AGENTS.md（本机文件路径，可选）",
+        "type": "string",
+        "default": "",
+        "hint": "填写保存在本机、由你维护的规则文件。选中该平台后，与通用约束一起传给本机的所有 harness；不会在远端安装 harness，也不会创建或覆盖远端 AGENTS.md。"
+      },
       "host": {
         "description": "服务器地址",
         "type": "string",
@@ -314,11 +395,20 @@
   "autodl": {
     "description": "AutoDL 设置（CLI 管理实例，SSH 运行实验）",
     "type": "object",
-    "condition": {
-      "platform": "autodl"
-    },
     "hint": "默认不授予任何查询、创建、开机、关机或实验执行权限。[安装与配置教程](https://github.com/aliveriver/factory/blob/main/docs/autodl.md)",
     "items": {
+      "capabilities": {
+        "description": "AutoDL能力与环境说明（供平台选择判断）",
+        "type": "text",
+        "default": "",
+        "hint": "填写已确认的 GPU/显存、内存、Python/依赖、数据位置及限制。不了解的部分写未知，不填凭据。自动选择不会擅自探测远端；本机另提供操作系统、CPU、总内存和 Python 的只读快照。"
+      },
+      "agents_file": {
+        "description": "AutoDL专用 AGENTS.md（本机文件路径，可选）",
+        "type": "string",
+        "default": "",
+        "hint": "填写保存在本机、由你维护的规则文件。选中该平台后，与通用约束一起传给本机的所有 harness；不会在远端安装 harness，也不会创建或覆盖远端 AGENTS.md。"
+      },
       "program": {
         "description": "本机 AutoDL CLI 路径",
         "type": "string",
@@ -557,51 +647,123 @@
   "limits": {
     "description": "⑦ 每个任务的资源限制",
     "type": "object",
-    "hint": "",
+    "hint": "八项限制均可单独开启无上限；关闭时继续使用原数值。既有数值 0 的含义保持不变，例如修复 0 次仍表示不自动修复。",
     "items": {
+      "unlimited_model_calls": {
+        "description": "最多 harness 调用轮次：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
+      },
       "model_calls": {
         "description": "最多 harness 调用轮次",
         "type": "int",
-        "default": 30
+        "default": 30,
+        "condition": {
+          "unlimited_model_calls": false
+        }
+      },
+      "unlimited_discussion_rounds": {
+        "description": "设计讨论轮数：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后不按轮数停止，讨论在所有参与者明确完成且无未决实质分歧时结束；不会要求永远讨论。"
       },
       "discussion_rounds": {
         "description": "设计讨论轮数",
         "type": "int",
-        "default": 2
+        "default": 2,
+        "condition": {
+          "unlimited_discussion_rounds": false
+        }
+      },
+      "unlimited_wall_seconds": {
+        "description": "任务活动时间上限（秒）：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
       },
       "wall_seconds": {
         "description": "任务活动时间上限（秒）",
         "type": "int",
-        "default": 3600
+        "default": 3600,
+        "condition": {
+          "unlimited_wall_seconds": false
+        }
+      },
+      "unlimited_run_seconds": {
+        "description": "单次实验运行上限（秒）：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
       },
       "run_seconds": {
         "description": "单次实验运行上限（秒）",
         "type": "int",
-        "default": 600
+        "default": 600,
+        "condition": {
+          "unlimited_run_seconds": false
+        }
+      },
+      "unlimited_repair_rounds": {
+        "description": "程序修复次数上限：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
       },
       "repair_rounds": {
         "description": "程序修复次数上限",
         "type": "int",
         "default": 5,
-        "hint": "仅修复程序错误，不自动调参追求正结果。"
+        "hint": "仅修复程序错误，不自动调参追求正结果。",
+        "condition": {
+          "unlimited_repair_rounds": false
+        }
+      },
+      "unlimited_network_retries": {
+        "description": "网络错误重试上限：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
       },
       "network_retries": {
         "description": "网络错误重试上限",
         "type": "int",
         "default": 2,
-        "hint": "不会重复提交结果不明的实验或实例创建。"
+        "hint": "不会重复提交结果不明的实验或实例创建。",
+        "condition": {
+          "unlimited_network_retries": false
+        }
+      },
+      "unlimited_archive_bytes": {
+        "description": "单次产物归档上限（字节）：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
       },
       "archive_bytes": {
         "description": "单次产物归档上限（字节）",
         "type": "int",
         "default": 20000000,
-        "hint": "默认约 20 MB。"
+        "hint": "默认约 20 MB。",
+        "condition": {
+          "unlimited_archive_bytes": false
+        }
+      },
+      "unlimited_tokens": {
+        "description": "观测 token 上限（0 表示不启用）：无上限",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后忽略该项数值，不设置此项任务阈值。仍可停止任务；连接超时、授权和无进展保护继续生效。"
       },
       "tokens": {
         "description": "观测 token 上限（0 表示不启用）",
         "type": "int",
         "default": 0,
-        "hint": "无需估算预算，可保持 0；此项不是服务商侧硬上限。"
+        "hint": "无需估算预算，可保持 0；此项不是服务商侧硬上限。",
+        "condition": {
+          "unlimited_tokens": false
+        }
       }
     }
   },

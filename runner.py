@@ -139,7 +139,10 @@ def main() -> None:
             checkpoint(directory, status)
             while process.poll() is None:
                 cancelled = (directory / "cancel").exists()
-                expired = time.time() - started >= request["timeout"]
+                expired = (
+                    request["timeout"] is not None
+                    and time.time() - started >= request["timeout"]
+                )
                 if cancelled or expired:
                     status["state"] = "cancelled" if cancelled else "timed_out"
                     if os.name == "nt":

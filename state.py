@@ -83,6 +83,8 @@ class Store:
             "participants": settings.get("participants", {}),
             "assignments": settings.get("assignments", {}),
             "platform": settings.get("platform", "local"),
+            "platform_order": settings.get("platform_order", []),
+            "platform_agents_file": settings.get("platform_agents_file", ""),
             "agents_file": settings.get("agents_file", ""),
             "agents": [],
             "sessions": {},
@@ -106,6 +108,11 @@ class Store:
             "notifications": [],
             "history": [],
         }
+        for key, value in task["limits"].items():
+            if key not in DEFAULT_LIMITS or (
+                value is not None and (type(value) is not int or value < 0)
+            ):
+                raise ValueError("Resource limits must be nonnegative integers or null")
         self.save(task)
         return task
 
@@ -174,9 +181,11 @@ class Store:
             for key in ("allocation", "instance_state", "instance_stop"):
                 if key in task:
                     document[key] = task[key]
+            for key in ("platform", "platform_order", "platform_selection", "agents"):
+                document[key] = task.get(key)
             staging = directory / "experiment.md.tmp"
             staging.write_text(
-                "# Research task\n\n```json\n"
+                "# 科研任务\n\n```json\n"
                 + json.dumps(document, ensure_ascii=False, indent=2)
                 + "\n```\n",
                 encoding="utf-8",
@@ -217,10 +226,11 @@ class Store:
             for parent in reversed((workspace, *workspace.parents))
             if (parent / "AGENTS.md").is_file()
         ]
-        if task["agents_file"]:
-            explicit = Path(task["agents_file"]).resolve(strict=True)
-            if explicit not in paths:
-                paths.append(explicit)
+        for selected in (task["agents_file"], task.get("platform_agents_file", "")):
+            if selected:
+                explicit = Path(selected).resolve(strict=True)
+                if explicit not in paths:
+                    paths.append(explicit)
         versions, sections = [], []
         for path in paths:
             raw = path.read_bytes()

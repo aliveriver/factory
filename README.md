@@ -13,7 +13,7 @@
 插件入口和元数据位于仓库根目录。
 
 使用 AstrBot 已有的 Python 环境，可在 AstrBot 仓库根目录运行 `uv sync`。
-插件使用宿主已有的 `filelock`，不额外引入 Python 依赖。当前宿主要求 Python 3.12+，
+插件使用宿主已有的 `filelock` 和 `psutil`，不额外引入 Python 依赖。当前宿主要求 Python 3.12+，
 插件和远端进程监督程序的语法兼容 Python 3.10+。请自行在本机安装并完成各个 harness
 的认证。远端不需要安装 harness，插件也不会安装。
 
@@ -36,14 +36,18 @@ SSH 使用密钥**文件引用**或 SSH agent；AutoDL 使用指定的环境变�
    旧 JSON 用户先填好表单，再明确选择“可视化表单”。
 2. 添加 Codex 或 DeepSeek 成员，填写唯一名称与明确模型，勾选负责阶段。
    只用一名成员时可承担全部五个阶段；多名成员可按发言顺序讨论。
-3. 下拉选择本机、已有 SSH 服务器或 AutoDL，填写随之显示的对应设置组。
+3. 平台默认按实验需求自动选择，优先顺序为本机 → SSH → AutoDL，可通过三个下拉框调整或排除平台；
+   也可以固定使用一个平台。填写已确认的平台能力与环境说明，未知条件会先询问。
    权限默认关闭，仅讨论时无需开启执行权限。
 4. AutoDL 选择“按实验方案自动创建，用完自动关机”，逐项添加允许使用的资源档位，
    再按需授予查询、付费创建、关机与 SSH 执行权限。
 5. 保存并重新加载插件，再发送 `research new 你的想法`。方案获批后才会运行实验或创建实例。
 
 模型、GPU、镜像与地域填写你实际可用的标识，不提供未经核实的现货或模型列表。
-启动参数逐项输入，资源限制使用数字输入框。完整步骤见 [可视化配置教程](docs/configuration.md)。
+启动参数逐项输入，八项任务资源限制均有独立的“无上限”开关。
+通用 AGENTS 与各平台专用 AGENTS 分开指定，文件均由用户在本机维护。
+SSH、AutoDL 只运行实验，本机 harness 负责研究、设计、编程与分析，不在远端安装 harness。
+完整步骤见 [可视化配置教程](docs/configuration.md)。
 
 ## 旧版 JSON 最小配置（高级兼容方式）
 
@@ -141,10 +145,12 @@ research plan TASK_ID
 research models TASK_ID
 research configure TASK_ID {"limits":{"repair_rounds":7}}
 research configure TASK_ID {"assignments":{"summary":["reviewer"]}}
+research configure TASK_ID {"limits":{"run_seconds":null}}
 ```
 
 `configure` 按名称选择管理员已配置的参与者，例如
 `{"participants":["builder","reviewer"]}`，并可覆盖任务的阶段分工和资源限制。
+任务资源限制用 `null` 表示无上限；原有整数 `0` 的含义保持不变。
 用户不能通过消息加入任意启动命令、模型、凭据、文件系统根目录或执行平台。
 修改配置时任务必须处于非活动状态；参与者或分工变化会使此前的方案批准失效。
 

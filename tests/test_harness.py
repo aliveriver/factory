@@ -131,7 +131,10 @@ async def test_deepseek_opaque_models_empty_resume_capability_and_no_fallback(tm
 
 
 @pytest.mark.asyncio
-async def test_codex_correlates_early_completion_and_ignores_other_turns(tmp_path):
+@pytest.mark.parametrize("timeout", [1, None])
+async def test_codex_correlates_early_completion_and_ignores_other_turns(
+    tmp_path, timeout
+):
     harness = CodexHarness({}, tmp_path, AsyncMock())
     harness.session_id = "TEST-thread"
     harness.model = "TEST-model"
@@ -181,4 +184,4 @@ async def test_codex_correlates_early_completion_and_ignores_other_turns(tmp_pat
 
     rpc.call.side_effect = call
     harness.rpc = rpc
-    assert (await harness.turn("TEST input", 1))["text"] == "MATCHED"
+    assert (await harness.turn("TEST input", timeout))["text"] == "MATCHED"

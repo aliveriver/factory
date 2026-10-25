@@ -4,13 +4,18 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import os
+import platform as local_platform
+import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 
+import psutil
+
 from .allocation import Allocation, resource_spec, task_platform
-from .execution import FINAL_RUN_STATES, AutoDL, make_executor
+from .execution import FINAL_RUN_STATES, PROTECTED_HOST, AutoDL, make_executor
 from .harness import make_harness
 from .state import PHASES, TERMINAL, Store
 
@@ -30,6 +35,16 @@ Return exactly one JSON object, without Markdown fences.
 For research: summary, evidence (source, fact, author_conclusion, inference,
 impact), question (only when necessary), disagreements, needs_confirmation.
 For discussion: summary, evidence, disagreements (only unresolved material issues).
+When context.round_limit is null, discussion has no round ceiling. Include
+discussion_complete=true only when your material issues are resolved; stop after
+all participants agree to finish.
+For platform selection: assessments (one per candidate, in the given order),
+each with platform, suitability (suitable, unsuitable, unknown), reason.
+Assess actual experiment requirements against known platform capabilities and
+constraints. Never guess missing GPU, dependency, dataset or server capabilities.
+An unknown higher-priority platform requires clarification before escalation.
+Do not mark a capable platform unsuitable solely because execution is not yet
+authorized. Unconfigured or protected candidates cannot be suitable.
 For design synthesis: summary, disagreements, plan containing baseline, change,
 data, metric, scale, decision_rule, resource_policy, commands (lists of argv),
 artifacts (relative files needed to verify results).
@@ -45,6 +60,8 @@ No improvement is a valid result, not a program failure or a reason to tune.
 Do not execute commands or modify files yourself. Return changes in files.
 Never use SSH, scp, platform CLIs, credentials or remote tools. The plugin alone
 owns experiment execution, resource limits, transport, polling and archives.
+All harnesses always run on this local computer, including for SSH and AutoDL
+experiments. Never install or start any harness on an experiment server.
 Proposed commands must run in the foreground; do not detach background jobs.
 User AGENTS constraints below apply unchanged to all participants.
 """
@@ -65,8 +82,11 @@ def evidence_saved(entries: list[dict]) -> bool:
         try:
             if entry["status"] != "downloaded" or not entry.get("local"):
                 return False
-            data = Path(entry["local"]).read_bytes()
-            if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+            digest = hashlib.sha256()
+            with Path(entry["local"]).open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != entry.get("sha256"):
                 return False
         except OSError:
             return False
@@ -134,6 +154,16 @@ class Workflow:
             selected = assignments.get(phase)
             if not selected or any(name not in safe for name in selected):
                 raise ValueError(f"Configure valid participant assignments for {phase}")
+        platform = self.settings.get("platform", "local")
+        order = self.settings.get("platform_order", ["local", "ssh", "autodl"])
+        if platform == "auto" and (
+            not order
+            or len(set(order)) != len(order)
+            or any(name not in self.settings.get("platforms", {}) for name in order)
+        ):
+            raise ValueError(
+                "Automatic execution needs a valid platform priority order"
+            )
         task = self.store.create(
             owner,
             address,
@@ -141,7 +171,11 @@ class Workflow:
             {
                 "participants": safe,
                 "assignments": assignments,
-                "platform": self.settings.get("platform", "local"),
+                "platform": platform,
+                "platform_order": order if platform == "auto" else [],
+                "platform_agents_file": self.settings.get("platforms", {})
+                .get(platform, {})
+                .get("agents_file", ""),
                 "agents_file": self.settings.get("agents_file", ""),
                 "limits": self.settings.get("limits", {}),
             },
@@ -272,15 +306,35 @@ class Workflow:
         elif action in {"reply", "supplement"}:
             if not text.strip():
                 raise ValueError("An answer or supplement is required")
+            if (
+                action == "supplement"
+                or task["phase"] not in {"research", "design", "select_platform"}
+            ) and any(run["state"] not in FINAL_RUN_STATES for run in task["runs"]):
+                raise ValueError(
+                    "Original run is unresolved; reconcile or stop it before revising the plan"
+                )
             task["supplements"].append(text)
             task["pending"] = None
-            if action == "supplement" or task["phase"] not in {"research", "design"}:
+            if action == "supplement" or task["phase"] not in {
+                "research",
+                "design",
+                "select_platform",
+            }:
                 # Core changes create a new plan; existing run evidence stays intact.
                 task["phase"] = "research"
                 task["approved_version"] = None
                 task["plan"] = {}
                 task["plan_version"] += 1
                 task["cursor"] = {}
+                if (
+                    task.get("platform_order")
+                    and not task["runs"]
+                    and not task.get("allocation")
+                ):
+                    task["platform"] = "auto"
+                    task["platform_agents_file"] = ""
+                    task.pop("platform_selection", None)
+                    task["sessions"] = {}
             task["status"] = "queued"
         elif action == "continue":
             if task["status"] in {"waiting_confirmation", "waiting_user"}:
@@ -440,9 +494,9 @@ class Workflow:
                             if item.get("run_id") != run["id"]
                         ] + [{"run_id": run["id"], **entry} for entry in entries]
                         self.store.save(task)
-                    elif (
-                        run["state"] == "unknown"
-                        or time.time() - run.get("submitted_at", time.time())
+                    elif run["state"] == "unknown" or (
+                        task["limits"]["run_seconds"] is not None
+                        and time.time() - run.get("submitted_at", time.time())
                         > task["limits"]["run_seconds"] + 20
                     ):
                         raise RuntimeError("Original run remains unconfirmed")
@@ -456,7 +510,10 @@ class Workflow:
                 if task_id in self.workers:
                     return
                 failures += 1
-                if failures > task["limits"]["network_retries"]:
+                if (
+                    task["limits"]["network_retries"] is not None
+                    and failures > task["limits"]["network_retries"]
+                ):
                     task["reason"] = (
                         f"Process reconciliation blocked: {type(exc).__name__}; "
                         "existing submission retained, no resubmission"
@@ -481,6 +538,7 @@ class Workflow:
         return (
             f"Research {task['id']}: {task['status']} / {task['phase']}\n"
             f"Plan v{task['plan_version']}, approved: {task['approved_version']}\n"
+            f"Execution platform: {task['platform']}; harnesses: local\n"
             f"{task['reason']}\n"
             f"Process: {run.get('state', 'not_submitted')}; "
             f"instance: {task.get('instance_state', 'not_managed')}\n"
@@ -490,6 +548,178 @@ class Workflow:
             f"Result: {json.dumps(task['result'], ensure_ascii=False)}\n"
             f"Artifacts: {self.store.directory(task['id'])}"
         )
+
+    async def select_platform(self, task: dict) -> None:
+        """Choose the first suitable configured platform before plan approval.
+
+        Args:
+            task: Unallocated task with an ordered platform candidate snapshot.
+
+        Raises:
+            ValueError: If the assessment is incomplete or invents a destination.
+            RuntimeError: If a previous allocation or run would be moved.
+        """
+        if task["runs"] or task.get("allocation"):
+            raise RuntimeError("An existing run or allocation cannot change platforms")
+        candidates = []
+        for name in task["platform_order"]:
+            config = self.settings["platforms"][name]
+            kind = config.get("type")
+            connection = config.get("ssh", config)
+            cloud = config.get("autodl", {})
+            forbidden = kind in {"ssh", "autodl"} and PROTECTED_HOST in json.dumps(
+                connection
+            )
+            configured = (
+                kind == "local"
+                or (
+                    kind == "ssh"
+                    and all(connection.get(key) for key in ("host", "user", "root"))
+                )
+                or (
+                    kind == "autodl"
+                    and all(connection.get(key) for key in ("user", "root"))
+                    and (
+                        bool(cloud.get("resource_profiles"))
+                        if cloud.get("mode") == "create"
+                        else bool(cloud.get("instance") and connection.get("host"))
+                    )
+                )
+            ) and not forbidden
+            candidate_task = {
+                **task,
+                "platform_agents_file": config.get("agents_file", ""),
+            }
+            constraints = self.store.constraints(candidate_task)
+            candidate = {
+                "name": name,
+                "type": kind,
+                "configured": bool(configured),
+                "protected": forbidden,
+                "execution_authorized": (
+                    config.get("allow_execute", False)
+                    if kind == "local"
+                    else connection.get("allow_execute", False)
+                ),
+                "capabilities": config.get("capabilities", ""),
+                "constraints": constraints,
+                "agents": candidate_task["agents"],
+            }
+            if kind == "local":
+                candidate["observed"] = {
+                    "os": local_platform.system(),
+                    "python": local_platform.python_version(),
+                    "logical_cpus": os.cpu_count(),
+                    "memory_total_bytes": psutil.virtual_memory().total,
+                    "gpu": "unknown unless specified in administrator capabilities",
+                    "dependencies": "unknown unless specified in administrator capabilities",
+                }
+            if kind == "autodl" and cloud.get("mode") == "create":
+                candidate["allocation_profiles"] = {
+                    profile: {
+                        key: value
+                        for key, value in values.items()
+                        if key
+                        in {
+                            "description",
+                            "gpu_spec",
+                            "image",
+                            "cuda_min",
+                            "gpus",
+                            "disk_gb",
+                            "region",
+                        }
+                    }
+                    for profile, values in cloud.get("resource_profiles", {}).items()
+                }
+            candidates.append(candidate)
+        output = await self.ask(
+            task,
+            task["assignments"]["summary"][0],
+            "platform selection",
+            {
+                "candidates": candidates,
+                "research": task["handoff"],
+                "instruction": (
+                    "Evaluate candidates in user priority order against this experiment. "
+                    "Candidate constraints are prospective rules for that destination, "
+                    "not simultaneous instructions for other destinations. "
+                    "No remote probing, paid operations or experiment execution occurs "
+                    "during selection. Unknown earlier capabilities need clarification."
+                ),
+            },
+        )
+        if output.get("question"):
+            task["status"] = "waiting_user"
+            task["pending"] = {
+                "participant": task["assignments"]["summary"][0],
+                "question": output["question"],
+            }
+            await self.announce(task, output["question"])
+            return
+        assessments = output.get("assessments")
+        if (
+            not isinstance(assessments, list)
+            or [item.get("platform") for item in assessments if isinstance(item, dict)]
+            != task["platform_order"]
+            or len(assessments) != len(candidates)
+        ):
+            raise ValueError(
+                "Platform assessment must cover every candidate in priority order"
+            )
+        for assessment, candidate in zip(assessments, candidates):
+            if (
+                assessment.get("suitability")
+                not in {"suitable", "unsuitable", "unknown"}
+                or not isinstance(assessment.get("reason"), str)
+                or not assessment["reason"].strip()
+            ):
+                raise ValueError(
+                    "Every platform assessment needs suitability and a reason"
+                )
+            if assessment["suitability"] == "suitable" and not candidate["configured"]:
+                raise ValueError(
+                    "An unconfigured or protected platform cannot be selected"
+                )
+        task["platform_selection"] = {
+            "assessments": assessments,
+            "candidates": [
+                {key: value for key, value in candidate.items() if key != "constraints"}
+                for candidate in candidates
+            ],
+        }
+        chosen = None
+        for assessment in assessments:
+            if assessment["suitability"] == "unknown":
+                question = f"请补充平台 {assessment['platform']} 的能力信息：{assessment['reason']}"
+                break
+            if assessment["suitability"] == "suitable":
+                chosen = assessment["platform"]
+                break
+        else:
+            question = "当前候选平台均无法满足实验需求，请补充资源或调整实验范围。"
+        if chosen is None:
+            task["status"] = "waiting_user"
+            task["pending"] = {
+                "participant": task["assignments"]["summary"][0],
+                "question": question,
+            }
+            await self.announce(task, question)
+            return
+        task["platform"] = chosen
+        task["platform_agents_file"] = self.settings["platforms"][chosen].get(
+            "agents_file", ""
+        )
+        task["platform_selection"]["chosen"] = chosen
+        # A different platform's rules must not inherit an old harness session.
+        for key in list(self.live):
+            if key[0] == task["id"]:
+                adapter = self.live.pop(key)
+                await adapter.close()
+        task["sessions"] = {}
+        self.store.constraints(task)
+        task["history"].append({"kind": "platform_selected", "platform": chosen})
+        self.store.save(task)
 
     async def ask(
         self, task: dict, participant: str, phase: str, context: dict
@@ -508,7 +738,10 @@ class Workflow:
         Raises:
             RuntimeError: If the response is invalid or a resource limit is reached.
         """
-        if task["usage"]["model_calls"] >= task["limits"]["model_calls"]:
+        if (
+            task["limits"]["model_calls"] is not None
+            and task["usage"]["model_calls"] >= task["limits"]["model_calls"]
+        ):
             raise RuntimeError("Model call limit reached")
         token_limit = task["limits"].get("tokens", 0)
         if token_limit and task["usage"]["tokens_actual"] >= token_limit:
@@ -577,6 +810,7 @@ class Workflow:
             # Keep discovery distinct from actual successful calls.
             task["sessions"][participant] = info
             self.store.save(task)
+        platform = self.settings.get("platforms", {}).get(task["platform"], {})
         prompt = (
             OUTPUT_CONTRACT
             + "\nPhase: "
@@ -590,6 +824,17 @@ class Workflow:
                     "plan": task["plan"],
                     "role": task["participants"][participant].get("role", phase),
                     "context": context,
+                    "execution_environment": {
+                        "platform": task["platform"],
+                        "type": platform.get("type"),
+                        "capabilities": platform.get("capabilities", ""),
+                        "python": (
+                            platform.get("ssh", platform).get("python", "python3")
+                            if platform.get("type") in {"ssh", "autodl"}
+                            else sys.executable
+                        ),
+                        "harness_location": "local",
+                    },
                     "allocation_profiles": (
                         self.settings.get("platforms", {})
                         .get(task["platform"], {})
@@ -617,8 +862,14 @@ class Workflow:
         try:
             response = await adapter.turn(
                 prompt,
-                timeout=max(
-                    1, task["limits"]["wall_seconds"] - task["usage"]["active_seconds"]
+                timeout=(
+                    None
+                    if task["limits"]["wall_seconds"] is None
+                    else max(
+                        1,
+                        task["limits"]["wall_seconds"]
+                        - task["usage"]["active_seconds"],
+                    )
                 ),
             )
         except Exception:
@@ -672,24 +923,31 @@ class Workflow:
             if task["status"] != "queued":
                 return
             self.tasks[task_id] = task
-            previous_constraints = task["agents"]
-            self.store.constraints(task)
-            if task["agents"] != previous_constraints:
-                task["history"].append(
-                    {
-                        "kind": "constraints_synchronized",
-                        "previous": previous_constraints,
-                        "current": task["agents"],
-                    }
-                )
             task["status"] = "active"
             started = time.monotonic()
             base_seconds = task["usage"]["active_seconds"]
             task["active_started_at"] = time.time()
             self.store.save(task)
             try:
-                remaining = task["limits"]["wall_seconds"] - base_seconds
-                if remaining <= 0:
+                platform = self.settings.get("platforms", {}).get(task["platform"], {})
+                task["platform_agents_file"] = platform.get("agents_file", "")
+                previous_constraints = task["agents"]
+                self.store.constraints(task)
+                if task["agents"] != previous_constraints:
+                    task["history"].append(
+                        {
+                            "kind": "constraints_synchronized",
+                            "previous": previous_constraints,
+                            "current": task["agents"],
+                        }
+                    )
+                self.store.save(task)
+                remaining = (
+                    None
+                    if task["limits"]["wall_seconds"] is None
+                    else task["limits"]["wall_seconds"] - base_seconds
+                )
+                if remaining is not None and remaining <= 0:
                     raise RuntimeError("Task active-time limit reached")
                 await asyncio.wait_for(self.advance(task), remaining)
             except asyncio.CancelledError:
@@ -755,7 +1013,9 @@ class Workflow:
                 if cursor.get("phase") != phase:
                     cursor = {"phase": phase, "round": 0, "index": 0, "opinions": []}
                     task["cursor"] = cursor
-                while cursor["round"] < rounds:
+                while not cursor.get("complete") and (
+                    rounds is None or cursor["round"] < rounds
+                ):
                     while cursor["index"] < len(participants):
                         name = participants[cursor["index"]]
                         output = await self.ask(
@@ -764,6 +1024,7 @@ class Workflow:
                             phase,
                             {
                                 "round": cursor["round"] + 1,
+                                "round_limit": rounds,
                                 "handoff": task["handoff"],
                                 "new_opinions": cursor["opinions"][
                                     -len(participants) :
@@ -793,6 +1054,8 @@ class Workflow:
                                 "summary": output.get("summary", ""),
                                 "evidence": output.get("evidence", []),
                                 "disagreements": output.get("disagreements", []),
+                                "discussion_complete": output.get("discussion_complete")
+                                is True,
                             }
                         )
                         cursor["index"] += 1
@@ -800,6 +1063,14 @@ class Workflow:
                     cursor["round"] += 1
                     cursor["index"] = 0
                     self.store.save(task)
+                    if rounds is None and all(
+                        item.get("discussion_complete")
+                        and not item.get("disagreements")
+                        for item in cursor["opinions"][-len(participants) :]
+                    ):
+                        cursor["complete"] = True
+                        self.store.save(task)
+                        break
                 task["handoff"] = json.dumps(cursor["opinions"], ensure_ascii=False)
                 if phase == "design":
                     summary = await self.ask(
@@ -823,6 +1094,11 @@ class Workflow:
                         raise ValueError(
                             "Plan lacks a required experiment agreement field"
                         )
+                    plan["execution_platform"] = {
+                        "name": task["platform"],
+                        "selection": task.get("platform_selection", {}),
+                        "agents": task["agents"],
+                    }
                     platform = self.settings.get("platforms", {}).get(
                         task["platform"], {}
                     )
@@ -885,9 +1161,25 @@ class Workflow:
                         + "\nUse approve/reject with this exact version. No reply means wait.",
                     )
                     return
+            elif phase == "select_platform":
+                await self.select_platform(task)
+                if task["status"] != "active":
+                    return
+                task["phase"] = "design"
+                task["cursor"] = {}
+                self.store.save(task)
+                continue
             elif phase == "prepare":
                 if task["approved_version"] != task["plan_version"]:
                     raise RuntimeError("Current plan version has not been approved")
+                agreement = task["plan"].get("execution_platform")
+                if agreement and (
+                    agreement["name"] != task["platform"]
+                    or agreement["agents"] != task["agents"]
+                ):
+                    raise RuntimeError(
+                        "Execution platform constraints changed; supplement and approve a new plan"
+                    )
                 platform = self.settings["platforms"][task["platform"]]
                 if (
                     task.get("allocation")
@@ -940,7 +1232,8 @@ class Workflow:
                             break
                         except SyntaxError as exc:
                             if (
-                                task["usage"]["repair_rounds"]
+                                task["limits"]["repair_rounds"] is not None
+                                and task["usage"]["repair_rounds"]
                                 >= task["limits"]["repair_rounds"]
                             ):
                                 raise RuntimeError(
@@ -1054,7 +1347,11 @@ class Workflow:
                     )
                 await self.announce(task, self.status(task))
                 return
-            task["phase"] = PHASES[PHASES.index(phase) + 1]
+            task["phase"] = (
+                "select_platform"
+                if phase == "research" and task["platform"] == "auto"
+                else PHASES[PHASES.index(phase) + 1]
+            )
             task["cursor"] = {}
             self.store.save(task)
 
@@ -1114,6 +1411,15 @@ class Workflow:
             raise RuntimeError(
                 "Experiment execution requires the current plan approval"
             )
+        agreement = task["plan"].get("execution_platform")
+        self.store.constraints(task)
+        if agreement and (
+            agreement["name"] != task["platform"]
+            or agreement["agents"] != task["agents"]
+        ):
+            raise RuntimeError(
+                "Execution platform constraints changed; supplement and approve a new plan"
+            )
         platform = task_platform(self.settings["platforms"][task["platform"]], task)
         if task.get("allocation") and task["allocation"].get("stopped"):
             platform = await Allocation(
@@ -1166,7 +1472,10 @@ class Workflow:
                     try:
                         status = await executor.query(run["reference"])
                     except (OSError, RuntimeError, TimeoutError):
-                        if attempts >= task["limits"]["network_retries"]:
+                        if (
+                            task["limits"]["network_retries"] is not None
+                            and attempts >= task["limits"]["network_retries"]
+                        ):
                             raise RuntimeError(
                                 "Run query unavailable; saved submission retained"
                             ) from None
@@ -1196,9 +1505,11 @@ class Workflow:
                     if item["status"] == "downloaded" and item.get("local"):
                         path = Path(item["local"])
                         if path.suffix in {".json", ".log", ".txt"}:
-                            evidence[item["path"]] = path.read_text(
-                                encoding="utf-8", errors="replace"
-                            )[-12000:]
+                            with path.open("rb") as stream:
+                                stream.seek(max(0, path.stat().st_size - 48000))
+                                evidence[item["path"]] = stream.read(48000).decode(
+                                    "utf-8", errors="replace"
+                                )[-12000:]
                 task["evidence"] = evidence
                 self.store.save(task)
                 if run["state"] == "succeeded":
@@ -1207,7 +1518,11 @@ class Workflow:
                     raise RuntimeError(
                         f"Experiment process {run['state']}; no automatic expansion"
                     )
-                if task["usage"]["repair_rounds"] >= task["limits"]["repair_rounds"]:
+                if (
+                    task["limits"]["repair_rounds"] is not None
+                    and task["usage"]["repair_rounds"]
+                    >= task["limits"]["repair_rounds"]
+                ):
                     raise RuntimeError("Model repair round limit reached")
                 signature = hashlib.sha256(
                     json.dumps(evidence, sort_keys=True).encode()

@@ -90,7 +90,7 @@ class LocalExecutor:
         return {"python": sys.version.split()[0], "kind": self.kind}
 
     async def submit(
-        self, workspace: Path, run_id: str, argv: list[str], timeout: float
+        self, workspace: Path, run_id: str, argv: list[str], timeout: float | None
     ) -> dict:
         """Persist an execution intent and launch an idempotent supervisor.
 
@@ -98,7 +98,7 @@ class LocalExecutor:
             workspace: Authorized task workspace.
             run_id: Previously persisted unique run identifier.
             argv: Approved reproduction command as an argument list.
-            timeout: Supervisor-enforced runtime limit.
+            timeout: Supervisor-enforced runtime limit, or None for no limit.
 
         Returns:
             Stable execution reference, independent of the Bot process.
@@ -200,7 +200,7 @@ class LocalExecutor:
         (Path(reference["directory"]) / "cancel").touch()
 
     async def collect(
-        self, workspace: Path, reference: dict, artifacts: list[str], limit: int
+        self, workspace: Path, reference: dict, artifacts: list[str], limit: int | None
     ) -> list[dict]:
         """Record available local evidence with integrity hashes.
 
@@ -208,7 +208,7 @@ class LocalExecutor:
             workspace: Task workspace.
             reference: Completed execution reference.
             artifacts: Approved relative artifact paths.
-            limit: Total evidence size ceiling.
+            limit: Total evidence size ceiling, or None for no limit.
 
         Returns:
             Integrity-checked archive entries.
@@ -240,25 +240,45 @@ class LocalExecutor:
             ):
                 entries.append({"path": name, "status": "missing"})
                 continue
-            total += path.stat().st_size
-            if total > limit:
-                entries.append({"path": name, "status": "not_saved", "reason": "size"})
-                continue
-            with path.open("rb") as stream:
-                data = stream.read(limit + 1)
-            if len(data) > limit:
+            expected_size = path.stat().st_size
+            total += expected_size
+            if limit is not None and total > limit:
                 entries.append({"path": name, "status": "not_saved", "reason": "size"})
                 continue
             target = archive / name
             target.parent.mkdir(parents=True, exist_ok=True)
+            digest, size = hashlib.sha256(), 0
+            remaining = None if limit is None else limit - total + expected_size
             if target != path:
-                target.write_bytes(data)
+                staging = target.with_name(target.name + ".tmp")
+                with path.open("rb") as source_stream, staging.open("wb") as output:
+                    for chunk in iter(lambda: source_stream.read(1024 * 1024), b""):
+                        size += len(chunk)
+                        if remaining is not None and size > remaining:
+                            break
+                        digest.update(chunk)
+                        output.write(chunk)
+            else:
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        size += len(chunk)
+                        if remaining is not None and size > remaining:
+                            break
+                        digest.update(chunk)
+            if remaining is not None and size > remaining:
+                if target != path:
+                    staging.unlink()
+                entries.append({"path": name, "status": "not_saved", "reason": "size"})
+                continue
+            if target != path:
+                staging.replace(target)
+            total += size - expected_size
             entries.append(
                 {
                     "path": name,
                     "status": "downloaded",
-                    "sha256": hashlib.sha256(data).hexdigest(),
-                    "bytes": len(data),
+                    "sha256": digest.hexdigest(),
+                    "bytes": size,
                     "local": str(target),
                 }
             )
@@ -382,7 +402,7 @@ class SSHExecutor:
         )
 
     async def submit(
-        self, workspace: Path, run_id: str, argv: list[str], timeout: float
+        self, workspace: Path, run_id: str, argv: list[str], timeout: float | None
     ) -> dict:
         """Upload a versioned workspace and claim a durable run once.
 
@@ -390,7 +410,7 @@ class SSHExecutor:
             workspace: Local task workspace.
             run_id: Persisted unique run identifier.
             argv: Approved argv, using paths relative to the remote workspace.
-            timeout: Remote supervisor deadline.
+            timeout: Remote supervisor deadline, or None for no limit.
 
         Returns:
             Stable remote execution reference.
@@ -470,7 +490,7 @@ class SSHExecutor:
         await self.remote(f"touch -- {shlex.quote(str(path))}")
 
     async def collect(
-        self, workspace: Path, reference: dict, artifacts: list[str], limit: int
+        self, workspace: Path, reference: dict, artifacts: list[str], limit: int | None
     ) -> list[dict]:
         """Download bounded evidence and compare remote and local SHA-256.
 
@@ -478,7 +498,7 @@ class SSHExecutor:
             workspace: Local task workspace.
             reference: Existing remote run.
             artifacts: Approved relative files.
-            limit: Maximum aggregate download size.
+            limit: Maximum aggregate download size, or None for no limit.
 
         Returns:
             Downloaded, remote-only, and failed archive entries.
@@ -523,7 +543,7 @@ class SSHExecutor:
                 )
                 total += metadata["bytes"]
                 entry.update(metadata)
-                if total > limit:
+                if limit is not None and total > limit:
                     entry["reason"] = "size"
                     entries.append(entry)
                     continue
@@ -538,10 +558,13 @@ class SSHExecutor:
                     ],
                     timeout=30,
                 )
+                digest = hashlib.sha256()
+                with target.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
                 if (
                     target.stat().st_size != metadata["bytes"]
-                    or hashlib.sha256(target.read_bytes()).hexdigest()
-                    != metadata["sha256"]
+                    or digest.hexdigest() != metadata["sha256"]
                 ):
                     raise ValueError("Evidence checksum mismatch")
                 entry.update(status="downloaded", local=str(target))

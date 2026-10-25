@@ -119,10 +119,8 @@ class Main(star.Star):
                     )
                 if "limits" in patch:
                     for key, value in patch["limits"].items():
-                        if (
-                            key not in task["limits"]
-                            or not isinstance(value, int)
-                            or value < 0
+                        if key not in task["limits"] or (
+                            value is not None and (type(value) is not int or value < 0)
                         ):
                             raise ValueError("Unknown or invalid resource limit")
                     task["limits"].update(patch["limits"])
