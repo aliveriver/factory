@@ -20,6 +20,10 @@
 在插件设置中配置 `settings_json`。不要将令牌、密码或私钥内容写入该 JSON。
 SSH 使用密钥**文件引用**或 SSH agent；AutoDL 使用指定的环境变量引用或已有系统凭据存储。
 
+第一次配置请先看 [WebUI 配置教程](docs/configuration.md)，其中逐项解释了页面上的字段、
+必填内容和常见错误。使用 AutoDL 时，再按 [AutoDL 安装与使用教程](docs/autodl.md)
+完成本机 CLI、凭据、SSH 与实例权限配置。
+
 仅 AstrBot 管理员和在 `allowed_users` 中明确配置的用户可以使用插件。
 每个允许的身份使用 `[platform_id,sender_id]` 的紧凑 JSON 编码，
 例如 `["my-telegram","12345"]`。任务归属同时校验经过认证的平台标识和发送者标识，

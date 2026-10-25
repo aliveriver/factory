@@ -1,11 +1,15 @@
 {
   "allowed_users": {
-    "description": "允许使用插件的用户身份，以紧凑 JSON [platform_id,sender_id] 编码；AstrBot 管理员也可使用",
+    "description": "谁可以使用（选填，管理员默认可用）",
+    "hint": "**自己使用：留空即可，AstrBot 管理员已有权限。**\n需要开放给其他用户时，每个列表项填写一个身份，例如 `[\"my-telegram\",\"12345\"]`。前一项是 AstrBot 中的平台 ID，后一项是用户 ID；两项都用双引号。不要只填 QQ 号，也不要填整个列表。这里只设置使用权限，不填写 API Key 或 AutoDL 令牌。",
+    "obvious_hint": true,
     "type": "list",
     "default": []
   },
   "settings_json": {
-    "description": "科研任务设置，包括参与者、阶段分工、执行平台和资源限制，详见 README.md。请勿在此 JSON 中存储凭据。",
+    "description": "实验配置（必填，点击右侧全屏按钮编辑）",
+    "hint": "**首次配置：按[配置教程](https://github.com/aliveriver/factory/blob/main/docs/configuration.md)复制 README 中的最小配置，再修改模型和启动命令。空的 `{}` 无法创建任务。**\n`participants`＝谁参与、用哪个模型；`assignments`＝各阶段由谁负责；`agents_file`＝你的 AGENTS.md 路径（选填）；`platform`＝本次选择的平台名称，须与 `platforms` 中的名称一致；`limits`＝调用次数和运行时长上限。\n**先保留 `allow_execute: false`，仅讨论方案；准备运行已批准的实验时再授权。** AutoDL 需另外安装 CLI、配置凭据和 SSH，详见 [AutoDL 使用教程](https://github.com/aliveriver/factory/blob/main/docs/autodl.md)。这里只填配置和凭据引用，不粘贴令牌、密码或私钥。Windows 路径建议使用 `/`。",
+    "obvious_hint": true,
     "type": "text",
     "editor_mode": true,
     "editor_language": "json",
