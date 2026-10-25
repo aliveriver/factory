@@ -8,7 +8,7 @@
   },
   "settings_json": {
     "description": "实验配置（必填，点击右侧全屏按钮编辑）",
-    "hint": "**首次配置：按[配置教程](https://github.com/aliveriver/factory/blob/main/docs/configuration.md)复制 README 中的最小配置，再修改模型和启动命令。空的 `{}` 无法创建任务。**\n`participants`＝谁参与、用哪个模型；`assignments`＝各阶段由谁负责；`agents_file`＝你的 AGENTS.md 路径（选填）；`platform`＝本次选择的平台名称，须与 `platforms` 中的名称一致；`limits`＝调用次数和运行时长上限。\n**先保留 `allow_execute: false`，仅讨论方案；准备运行已批准的实验时再授权。** AutoDL 需另外安装 CLI、配置凭据和 SSH，详见 [AutoDL 使用教程](https://github.com/aliveriver/factory/blob/main/docs/autodl.md)。这里只填配置和凭据引用，不粘贴令牌、密码或私钥。Windows 路径建议使用 `/`。",
+    "hint": "**首次配置：按[配置教程](https://github.com/aliveriver/factory/blob/main/docs/configuration.md)复制 README 中的最小配置，再修改模型和启动命令。空的 `{}` 无法创建任务。**\n`participants`＝谁参与、用哪个模型；`assignments`＝各阶段由谁负责；`agents_file`＝你的 AGENTS.md 路径（选填）；`platform`＝本次选择的平台名称，须与 `platforms` 中的名称一致；`limits`＝调用次数和运行时长上限。\n**先保留 `allow_execute: false`，仅讨论方案；准备运行已批准的实验时再授权。** AutoDL 可选择按资源档位自动创建 Pro 实例，用完自动关机；需配置 `mode: \"create\"`、`resource_profiles`，并授权创建、查询、关机和 SSH 执行。普通容器仅支持已有实例。详见 [AutoDL 使用教程](https://github.com/aliveriver/factory/blob/main/docs/autodl.md)。这里只填配置和凭据引用，不粘贴令牌、密码或私钥。Windows 路径建议使用 `/`。",
     "obvious_hint": true,
     "type": "text",
     "editor_mode": true,

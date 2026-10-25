@@ -1,6 +1,7 @@
 """Offline workflow acceptance using explicitly labelled test doubles."""
 
 import asyncio
+import hashlib
 import json
 import sys
 import time
@@ -142,6 +143,7 @@ class TestExecutorDouble:
                 "path": "metrics.json",
                 "status": "not_saved" if self.archive_failure else "downloaded",
                 "local": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             }
         ]
 

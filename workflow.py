@@ -9,6 +9,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 
+from .allocation import Allocation, resource_spec, task_platform
 from .execution import FINAL_RUN_STATES, AutoDL, make_executor
 from .harness import make_harness
 from .state import PHASES, TERMINAL, Store
@@ -32,6 +33,9 @@ For discussion: summary, evidence, disagreements (only unresolved material issue
 For design synthesis: summary, disagreements, plan containing baseline, change,
 data, metric, scale, decision_rule, resource_policy, commands (lists of argv),
 artifacts (relative files needed to verify results).
+If allocation_profiles are provided, plan must include resources with profile
+(one exact allowed profile name) and reason. Select the smallest suitable approved
+profile for the experiment; never invent GPU, image, price, region or quota values.
 Do not invent a baseline, dataset, measurement, external capability or success.
 For implement/repair: summary, files (relative path to complete UTF-8 content).
 Implement the approved plan only; never change its comparison, metric or scope.
@@ -44,6 +48,29 @@ owns experiment execution, resource limits, transport, polling and archives.
 Proposed commands must run in the foreground; do not detach background jobs.
 User AGENTS constraints below apply unchanged to all participants.
 """
+
+
+def evidence_saved(entries: list[dict]) -> bool:
+    """Check the local bytes before reusing evidence after instance shutdown.
+
+    Args:
+        entries: Archive manifest entries for one or more runs.
+
+    Returns:
+        Whether every entry has a local file matching its recorded checksum.
+    """
+    if not entries:
+        return False
+    for entry in entries:
+        try:
+            if entry["status"] != "downloaded" or not entry.get("local"):
+                return False
+            data = Path(entry["local"]).read_bytes()
+            if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+                return False
+        except OSError:
+            return False
+    return True
 
 
 class Workflow:
@@ -185,6 +212,12 @@ class Workflow:
                 worker.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await worker
+            monitor = self.monitors.get(task_id)
+            if monitor:
+                monitor.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await monitor
+                self.monitors.pop(task_id, None)
             task = self.store.load(task_id, owner)
             task["status"] = "cancelled"
             task["reason"] = (
@@ -193,6 +226,8 @@ class Workflow:
             self.store.save(task)
             await self.settle(task, cancel=True)
             await self.announce(task, self.status(task))
+            if task.get("allocation") and not task["allocation"].get("stopped"):
+                self.monitor(task_id)
             return task
         pending = task.get("pending")
         if action == "reply" and pending and pending.get("native"):
@@ -256,9 +291,19 @@ class Workflow:
                 task["pending"] = None
         else:
             raise ValueError("Unsupported task action")
+        # A user transition owns the checkpoint; stop a concurrent reconciliation
+        # before saving or scheduling a worker that may restart the same instance.
+        monitor = self.monitors.get(task_id)
+        if monitor:
+            monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor
+            self.monitors.pop(task_id, None)
         self.store.save(task)
         if task["status"] == "queued":
             self.schedule(task_id)
+        elif task.get("allocation") and not task["allocation"].get("stopped"):
+            self.monitor(task_id)
         return task
 
     async def recover(self) -> None:
@@ -273,7 +318,9 @@ class Workflow:
                 task["active_started_at"] = None
                 self.store.save(task)
             platform = self.settings.get("platforms", {}).get(task["platform"], {})
-            if task.get("instance_stop") and platform.get("type") == "autodl":
+            if task.get("allocation"):
+                self.monitor(task["id"])
+            elif task.get("instance_stop") and platform.get("type") == "autodl":
                 try:
                     task["instance_state"] = await AutoDL(platform["autodl"]).invoke(
                         "status", platform["autodl"].get("instance")
@@ -325,10 +372,50 @@ class Workflow:
             outstanding = [
                 run for run in task["runs"] if run["state"] not in FINAL_RUN_STATES
             ]
-            if not outstanding:
+            if not outstanding or task.get("allocation", {}).get("shutdown_started_at"):
+                if task.get("allocation") and not task["allocation"].get("stopped"):
+                    await self.settle(task, cancel=False)
+                    if task["allocation"].get("stopped"):
+                        if (
+                            task["phase"] == "archive"
+                            and task.get("archive_complete")
+                            and task["status"] not in TERMINAL
+                        ):
+                            task.update(
+                                phase="completed",
+                                status="completed",
+                                reason="Evidence archived; allocated instance shutdown confirmed",
+                            )
+                            await self.announce(task, self.status(task))
+                        return
+                    timeout = (
+                        self.settings.get("platforms", {})
+                        .get(task["platform"], {})
+                        .get("autodl", {})
+                        .get("shutdown_seconds", 120)
+                    )
+                    if type(timeout) is not int or not 1 <= timeout <= 3600:
+                        timeout = 120
+                    if (
+                        time.time()
+                        - task["allocation"].get(
+                            "shutdown_started_at",
+                            task["allocation"].get("created_at", 0),
+                        )
+                        > timeout
+                    ):
+                        task["reason"] = (
+                            "Allocated instance shutdown is unconfirmed; inspect allocation ID/name before further operations"
+                        )
+                        self.store.save(task)
+                        await self.announce(task, self.status(task))
+                        return
+                    continue
                 return
             try:
-                platform = self.settings["platforms"][task["platform"]]
+                platform = task_platform(
+                    self.settings["platforms"][task["platform"]], task
+                )
                 executor = self.executor_factory(platform)
                 for run in outstanding:
                     status = await executor.query(run["reference"])
@@ -363,7 +450,8 @@ class Workflow:
                 if all(run["state"] in FINAL_RUN_STATES for run in task["runs"]):
                     await self.settle(task, cancel=False)
                     await self.announce(task, self.status(task))
-                    return
+                    if not task.get("allocation") or task["allocation"].get("stopped"):
+                        return
             except Exception as exc:
                 if task_id in self.workers:
                     return
@@ -375,6 +463,8 @@ class Workflow:
                     )
                     await self.settle(task, cancel=False)
                     await self.announce(task, self.status(task))
+                    if task.get("allocation") and not task["allocation"].get("stopped"):
+                        continue
                     return
 
     def status(self, task: dict) -> str:
@@ -387,12 +477,15 @@ class Workflow:
             Human-readable status and current artifact entry point.
         """
         run = task["runs"][-1] if task["runs"] else {}
+        allocation = task.get("allocation", {})
         return (
             f"Research {task['id']}: {task['status']} / {task['phase']}\n"
             f"Plan v{task['plan_version']}, approved: {task['approved_version']}\n"
             f"{task['reason']}\n"
             f"Process: {run.get('state', 'not_submitted')}; "
             f"instance: {task.get('instance_state', 'not_managed')}\n"
+            f"Allocation: {allocation.get('instance', allocation.get('name', 'not_allocated'))}; "
+            f"state: {allocation.get('state', 'not_managed')}\n"
             f"Usage: {json.dumps(task['usage'], ensure_ascii=False)}\n"
             f"Result: {json.dumps(task['result'], ensure_ascii=False)}\n"
             f"Artifacts: {self.store.directory(task['id'])}"
@@ -449,6 +542,21 @@ class Workflow:
                         else ""
                     ),
                 )
+                if task.get("allocation"):
+                    deadline = time.monotonic() + self.settings["platforms"][
+                        task["platform"]
+                    ]["autodl"].get("shutdown_seconds", 120)
+                    while True:
+                        await self.settle(task, cancel=False)
+                        if task["allocation"].get("stopped"):
+                            break
+                        if time.monotonic() >= deadline:
+                            await self.announce(
+                                task,
+                                "Instance shutdown is unconfirmed; inspect the saved allocation.",
+                            )
+                            break
+                        await asyncio.sleep(1)
 
         if adapter is None:
             saved = task["participants"][participant]
@@ -482,6 +590,18 @@ class Workflow:
                     "plan": task["plan"],
                     "role": task["participants"][participant].get("role", phase),
                     "context": context,
+                    "allocation_profiles": (
+                        self.settings.get("platforms", {})
+                        .get(task["platform"], {})
+                        .get("autodl", {})
+                        .get("resource_profiles", {})
+                        if self.settings.get("platforms", {})
+                        .get(task["platform"], {})
+                        .get("autodl", {})
+                        .get("mode")
+                        == "create"
+                        else {}
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -599,7 +719,23 @@ class Workflow:
                             await adapter.close()
                 self.store.save(task)
                 self.tasks.pop(task_id, None)
+                if task.get("allocation") and task["status"] != "completed":
+                    await self.settle(task, cancel=False)
+                    if (
+                        task["allocation"].get("stopped")
+                        and task.get("archive_complete")
+                        and task["phase"] == "archive"
+                        and task["status"] == "paused"
+                    ):
+                        task.update(
+                            phase="completed",
+                            status="completed",
+                            reason="Evidence archived; allocated instance shutdown confirmed",
+                        )
+                        await self.announce(task, self.status(task))
                 if any(run["state"] not in FINAL_RUN_STATES for run in task["runs"]):
+                    self.monitor(task_id)
+                elif task.get("allocation") and not task["allocation"].get("stopped"):
                     self.monitor(task_id)
 
     async def advance(self, task: dict) -> None:
@@ -687,6 +823,17 @@ class Workflow:
                         raise ValueError(
                             "Plan lacks a required experiment agreement field"
                         )
+                    platform = self.settings.get("platforms", {}).get(
+                        task["platform"], {}
+                    )
+                    if platform.get("autodl", {}).get("mode") == "create":
+                        spec = resource_spec(platform, plan)
+                        plan["resources"] = {
+                            "profile": plan["resources"]["profile"],
+                            "reason": plan["resources"]["reason"],
+                            "spec": spec,
+                            "lifecycle": "create_after_approval_and_always_stop",
+                        }
                     if "artifacts" not in plan or not isinstance(
                         plan["artifacts"], list
                     ):
@@ -742,8 +889,14 @@ class Workflow:
                 if task["approved_version"] != task["plan_version"]:
                     raise RuntimeError("Current plan version has not been approved")
                 platform = self.settings["platforms"][task["platform"]]
-                executor = self.executor_factory(platform)
-                if platform["type"] == "autodl":
+                if (
+                    task.get("allocation")
+                    or platform.get("autodl", {}).get("mode") == "create"
+                ):
+                    platform = await Allocation(
+                        platform, task, self.store.save
+                    ).prepare()
+                elif platform["type"] == "autodl":
                     manager = AutoDL(platform["autodl"])
                     task["instance_state"] = await manager.invoke(
                         "status", platform["autodl"].get("instance")
@@ -774,6 +927,7 @@ class Workflow:
                             raise RuntimeError(
                                 "AutoDL instance has not reached its running status"
                             )
+                executor = self.executor_factory(platform)
                 task["preflight"] = await executor.preflight()
             elif phase == "implement":
                 for name in task["assignments"]["implement"]:
@@ -844,11 +998,20 @@ class Workflow:
                 )
                 task["result"]["delivery"] = summary
             elif phase == "archive":
-                platform = self.settings["platforms"][task["platform"]]
+                platform = task_platform(
+                    self.settings["platforms"][task["platform"]], task
+                )
                 executor = self.executor_factory(platform)
                 workspace = self.store.directory(task["id"]) / "workspace"
                 for run in task["runs"]:
                     if run["state"] not in FINAL_RUN_STATES:
+                        continue
+                    saved = [
+                        entry
+                        for entry in task["manifest"]
+                        if entry.get("run_id") == run["id"]
+                    ]
+                    if task.get("allocation") and evidence_saved(saved):
                         continue
                     entries = await executor.collect(
                         workspace,
@@ -864,11 +1027,24 @@ class Workflow:
                         if item.get("run_id") != run["id"]
                     ] + [{"run_id": run["id"], **entry} for entry in entries]
                     self.store.save(task)
+                task["archive_complete"] = bool(task["manifest"]) and all(
+                    entry["status"] == "downloaded" for entry in task["manifest"]
+                )
+                if task.get("allocation"):
+                    task["archive_complete"] = evidence_saved(task["manifest"])
+                self.store.save(task)
                 await self.settle(task, cancel=False)
-                if any(item["status"] != "downloaded" for item in task["manifest"]):
+                if any(item["status"] != "downloaded" for item in task["manifest"]) or (
+                    task.get("allocation") and not task["archive_complete"]
+                ):
                     task["status"] = "paused"
                     task["reason"] = (
                         "Required evidence is not fully archived; see manifest"
+                    )
+                elif task.get("allocation") and not task["allocation"].get("stopped"):
+                    task["status"] = "paused"
+                    task["reason"] = (
+                        "Evidence archived; waiting for allocated instance shutdown confirmation"
                     )
                 else:
                     task["phase"] = "completed"
@@ -938,7 +1114,11 @@ class Workflow:
             raise RuntimeError(
                 "Experiment execution requires the current plan approval"
             )
-        platform = self.settings["platforms"][task["platform"]]
+        platform = task_platform(self.settings["platforms"][task["platform"]], task)
+        if task.get("allocation") and task["allocation"].get("stopped"):
+            platform = await Allocation(
+                self.settings["platforms"][task["platform"]], task, self.store.save
+            ).prepare()
         executor = self.executor_factory(platform)
         workspace = self.store.directory(task["id"]) / "workspace"
         for index, argv in enumerate(task["plan"]["commands"]):
@@ -1023,7 +1203,7 @@ class Workflow:
                 self.store.save(task)
                 if run["state"] == "succeeded":
                     break
-                if run["state"] in {"cancelled", "timed_out"}:
+                if run["state"] in {"cancelled", "timed_out", "interrupted"}:
                     raise RuntimeError(
                         f"Experiment process {run['state']}; no automatic expansion"
                     )
@@ -1057,17 +1237,72 @@ class Workflow:
             task: Current persisted task.
             cancel: Whether the owner requested process cancellation.
         """
-        platform = self.settings.get("platforms", {}).get(task["platform"], {})
-        if task["runs"]:
+        try:
+            platform = task_platform(
+                self.settings.get("platforms", {}).get(task["platform"], {}), task
+            )
+        except ValueError:
+            task["instance_state"] = {
+                "status": "unknown",
+                "error": "Restore the original AutoDL platform configuration",
+            }
+            self.store.save(task)
+            return
+        if task["runs"] and not (task.get("allocation") and task.get("instance_stop")):
             try:
                 executor = self.executor_factory(platform)
                 for run in task["runs"]:
-                    if cancel and run["state"] not in FINAL_RUN_STATES:
+                    if (cancel or task.get("allocation")) and run[
+                        "state"
+                    ] not in FINAL_RUN_STATES:
                         await executor.cancel(run["reference"])
                         run["state"] = "cancel_requested"
+                        if task.get("allocation"):
+                            deadline = time.monotonic() + 5
+                            while time.monotonic() < deadline:
+                                run.update(await executor.query(run["reference"]))
+                                if run["state"] in FINAL_RUN_STATES:
+                                    break
+                                await asyncio.sleep(0.2)
+                    if task.get("allocation") and run["state"] in FINAL_RUN_STATES:
+                        saved = [
+                            entry
+                            for entry in task["manifest"]
+                            if entry.get("run_id") == run["id"]
+                        ]
+                        if not evidence_saved(saved):
+                            entries = await executor.collect(
+                                self.store.directory(task["id"]) / "workspace",
+                                run["reference"],
+                                task["plan"]["artifacts"]
+                                if run["state"] == "succeeded"
+                                else [],
+                                task["limits"]["archive_bytes"],
+                            )
+                            task["manifest"] = [
+                                entry
+                                for entry in task["manifest"]
+                                if entry.get("run_id") != run["id"]
+                            ] + [{"run_id": run["id"], **entry} for entry in entries]
             except Exception as exc:
                 task["cleanup_error"] = type(exc).__name__
-        if platform.get("type") == "autodl":
+        if task.get("allocation"):
+            try:
+                await Allocation(platform, task, self.store.save).stop()
+                if task["allocation"].get("stopped"):
+                    for run in task["runs"]:
+                        if run["state"] not in FINAL_RUN_STATES:
+                            run.update(
+                                state="interrupted",
+                                exit_code=None,
+                                reason="Instance shutdown confirmed; supervisor exit status unavailable",
+                            )
+            except Exception as exc:
+                task["instance_state"] = {
+                    "status": "unknown",
+                    "error": type(exc).__name__,
+                }
+        elif platform.get("type") == "autodl":
             try:
                 manager = AutoDL(platform["autodl"])
                 archive_ok = bool(task["manifest"]) and all(

@@ -18,7 +18,7 @@ LOGIN_COMMAND = (
     "ssh duankaidi@10.8.176.151 'mkdir -- \"$HOME/astrbot-plugin-login-test-20261024\"'"
 )
 RUNNER = Path(__file__).with_name("runner.py")
-FINAL_RUN_STATES = {"succeeded", "failed", "cancelled", "timed_out"}
+FINAL_RUN_STATES = {"succeeded", "failed", "cancelled", "timed_out", "interrupted"}
 
 
 async def command(
@@ -311,7 +311,12 @@ class SSHExecutor:
             "-o",
             "BatchMode=yes",
             "-o",
-            "StrictHostKeyChecking=yes",
+            "StrictHostKeyChecking="
+            + (
+                "accept-new"
+                if self.config.get("accept_new_host_keys", False)
+                else "yes"
+            ),
             "-o",
             "ConnectTimeout=10",
             "-P" if scp else "-p",
@@ -551,7 +556,7 @@ class AutoDL:
 
     Args:
         config: CLI executable, instance kind/ID, credential environment reference,
-            and independent discovery/start/stop permissions.
+            and independent discovery/create/start/stop permissions.
         transport: Injectable command transport.
     """
 
@@ -567,12 +572,23 @@ class AutoDL:
         }:
             raise ValueError("Unsupported AutoDL stop policy")
 
-    async def invoke(self, operation: str, instance: str | None = None) -> dict:
+    async def invoke(
+        self,
+        operation: str,
+        instance: str | None = None,
+        *,
+        resources: dict | None = None,
+        name: str = "",
+        page: int = 1,
+    ) -> dict:
         """Perform an allowed operation without retrying ambiguous mutations.
 
         Args:
-            operation: list, status, start, or stop.
-            instance: Explicit existing instance identifier.
+            operation: list, get, create, status, start, or stop.
+            instance: Explicit instance identifier, except for list and create.
+            resources: Administrator-approved creation parameters.
+            name: Unique persisted allocation name for reconciliation.
+            page: Page of instance discovery to retrieve.
 
         Returns:
             CLI API response with only non-secret status information.
@@ -581,16 +597,16 @@ class AutoDL:
             PermissionError: If this operation lacks independent authorization.
             ValueError: If the operation or instance is invalid.
         """
-        if operation not in {"list", "status", "start", "stop"}:
-            raise ValueError("Creating or releasing AutoDL resources is unsupported")
+        if operation not in {"list", "get", "create", "status", "start", "stop"}:
+            raise ValueError("Unsupported AutoDL operation; release is disabled")
         permission = (
             "allow_discovery"
-            if operation in {"list", "status"}
+            if operation in {"list", "get", "status"}
             else f"allow_{operation}"
         )
         if not self.config.get(permission, False):
             raise PermissionError(f"AutoDL {operation} has not been authorized")
-        if operation != "list" and (
+        if operation not in {"list", "create"} and (
             not instance or not re.fullmatch(r"[a-zA-Z0-9_-]+", instance)
         ):
             raise ValueError("An explicit existing AutoDL instance is required")
@@ -598,6 +614,23 @@ class AutoDL:
         args = [*self.config.get("command", ["autodl"]), group, operation]
         if instance:
             args.append(instance)
+        if operation == "create":
+            if group != "instance":
+                raise ValueError("Automatic creation supports Pro instances only")
+            if not resources or not re.fullmatch(r"astrbot-[0-9a-f]{32}", name):
+                raise ValueError(
+                    "Approved resources and an allocation name are required"
+                )
+            for key in ("gpu_spec", "image", "cuda_min", "gpus", "disk_gb"):
+                value = resources[key]
+                if not isinstance(value, (str, int)) or str(value).startswith("-"):
+                    raise ValueError("Invalid AutoDL creation parameter")
+                args.extend(["--" + key.replace("_", "-"), str(value)])
+            if resources.get("region"):
+                args.extend(["--region", ",".join(resources["region"])])
+            args.extend(["--name", name])
+        if operation == "list" and page != 1:
+            args.extend(["--page", str(page)])
         args.extend(["--json", "--timeout", "20s"])
         # Secrets are resolved only into a child environment, never an argv or record.
         environment = os.environ.copy()
@@ -615,14 +648,39 @@ class AutoDL:
             data = raw.get("data", [])
             if isinstance(data, dict):
                 data = data.get("list", data.get("instances", []))
-            return {
+            result = {
                 "instances": [
                     {k: item[k] for k in ("uuid", "status", "name") if k in item}
                     for item in data
                     if isinstance(item, dict)
                 ]
             }
+            payload = raw.get("data", {})
+            result["max_page"] = (
+                payload.get("max_page", 1) if isinstance(payload, dict) else 1
+            )
+            return result
         data = raw.get("data")
+        if operation == "create":
+            if not isinstance(data, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+", data):
+                raise RuntimeError(
+                    "AutoDL create returned no valid instance identifier"
+                )
+            return {"instance": data}
+        if operation == "get":
+            # Discard connection passwords and notebook tokens before returning.
+            if not isinstance(data, dict):
+                raise RuntimeError("AutoDL snapshot is unavailable")
+            host, port = data.get("proxy_host"), data.get("ssh_port")
+            if (
+                not isinstance(host, str)
+                or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9.-]*", host)
+                or type(port) is not int
+                or not 1 <= port <= 65535
+                or host == PROTECTED_HOST
+            ):
+                raise ValueError("AutoDL returned an invalid or protected SSH endpoint")
+            return {"host": host, "port": port}
         if operation == "status" and isinstance(data, dict):
             data = data.get("status", "unknown")
         return {"status": data if operation == "status" else "requested"}

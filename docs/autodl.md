@@ -1,8 +1,10 @@
 # AutoDL 安装、配置与使用
 
-插件使用 `saurlax/autodl-cli` 管理已有实例，通过 OpenSSH 上传和运行实验。
+插件使用 `saurlax/autodl-cli` 按需创建 Pro 实例或管理已有实例，通过 OpenSSH 上传和运行实验。
 这两条连接独立配置：**AutoDL CLI 管理实例，SSH 连接实例里的实验环境**。
-插件不会自动安装 CLI，不会创建或释放实例，也不会在远端安装 harness。
+插件不会自动安装 CLI，不会释放实例，也不会在远端安装 harness。
+自动创建需先配置允许使用的资源档位，方案获批后才会创建；结束、失败或取消时自动关机。
+普通容器仅支持已有实例，不支持自动创建。
 
 ## 1. 在本机安装 CLI
 
@@ -79,7 +81,9 @@ WebUI 里填的是**变量名**，不是令牌本身。
 已运行的 AstrBot 不会自动读到另一个新终端的变量；应在设置变量的环境中重新启动。
 系统凭据存储和环境变量引用选择一种即可。
 
-## 3. 手动查询已有实例
+## 3. 手动查询已有实例（可选）
+
+自动创建模式不需要你预先填写实例标识。本节用于核对已有资源或配置已有实例模式。
 
 以下命令会访问 AutoDL 账号或已有实例，仅在你决定查询本人资源时自行执行：
 
@@ -100,13 +104,21 @@ WebUI 里填的是**变量名**，不是令牌本身。
 
 上游的 `instance get`、`container get` 和普通容器的原始 JSON 列表可能包含连接密码或
 Jupyter 令牌，不要把这些输出粘贴进聊天、公开文档或 Git。
-插件仅保留脱敏的实例列表和状态，不请求 `get`。
+插件只保留脱敏的实例列表与状态。自动创建模式还会调用 Pro 的 `get`，
+但只取连接主机与端口，不保存密码和其他连接令牌。
 
 ## 4. 配置插件
 
 保留 README 中的 `participants`、`assignments` 等设置，
 将其 `platform` 和 `platforms` 替换为下方内容。这里使用系统凭据存储，
-因此没有 `token_env`：
+因此没有 `token_env`。
+
+### 按实验需求自动创建并关机
+
+此示例启用了 Pro 创建、启动、查询、关机和 SSH 执行权限。
+请先替换所有示例值，确认允许使用的 GPU、镜像和地域，再保存。
+保存这些权限后，**批准实验方案即允许插件按方案创建付费实例**。
+仅保存配置或讨论方案不会创建实例。
 
 ```json
 {
@@ -115,24 +127,43 @@ Jupyter 令牌，不要把这些输出粘贴进聊天、公开文档或 Git。
     "my_autodl": {
       "type": "autodl",
       "ssh": {
-        "host": "YOUR_INSTANCE_SSH_HOST",
         "user": "root",
-        "port": 22222,
         "identity_file": "C:/Users/YOUR_USER/.ssh/id_ed25519",
         "root": "/root/dedicated-astrbot-experiments",
         "python": "python3",
-        "allow_execute": false
+        "allow_execute": true,
+        "accept_new_host_keys": true
       },
       "autodl": {
         "command": ["C:/Tools/autodl/autodl.exe"],
+        "mode": "create",
         "kind": "pro",
-        "instance": "YOUR_EXISTING_INSTANCE_ID",
+        "allow_create": true,
         "allow_discovery": true,
-        "allow_start": false,
-        "allow_stop": false,
-        "start_on_prepare": false,
+        "allow_start": true,
+        "allow_stop": true,
+        "startup_seconds": 300,
         "running_status": "running",
-        "stop_policy": "leave"
+        "resource_profiles": {
+          "small": {
+            "description": "小规模对比实验，使用预装依赖和 SSH 公钥的私有镜像",
+            "gpu_spec": "YOUR_APPROVED_GPU_SPEC_ID",
+            "image": "YOUR_PREPARED_IMAGE_UUID",
+            "cuda_min": 118,
+            "gpus": 1,
+            "disk_gb": 0,
+            "region": ["YOUR_APPROVED_REGION"]
+          },
+          "large": {
+            "description": "确有较大显存或多卡需求时才选择此档",
+            "gpu_spec": "YOUR_LARGER_APPROVED_GPU_SPEC_ID",
+            "image": "YOUR_PREPARED_IMAGE_UUID",
+            "cuda_min": 118,
+            "gpus": 2,
+            "disk_gb": 0,
+            "region": ["YOUR_APPROVED_REGION"]
+          }
+        }
       }
     }
   }
@@ -145,67 +176,90 @@ Jupyter 令牌，不要把这些输出粘贴进聊天、公开文档或 Git。
 | --- | --- |
 | `platform` | 填 `platforms` 中的条目名称，本例是 `my_autodl` |
 | `command` | 本机 CLI 路径；如果 PATH 已配置，可用 `["autodl"]` |
-| `kind` | Pro 用 `pro`，普通容器用 `container` |
-| `instance` | 已有实例的真实标识，不是显示名称，也不是 SSH 主机地址 |
+| `mode` | `create` 为按需创建；`existing` 为使用已有实例，省略时兼容已有模式 |
+| `kind` | 自动创建必须用 `pro`；已有模式可以用 `pro` 或 `container` |
+| `instance` | 仅已有模式填写已有实例标识；创建模式由插件记录，不需要预填 |
+| `resource_profiles` | 管理员允许的资源档位；方案只能选择其中一个，并说明理由 |
+| `gpu_spec`、`image` | 有效的 GPU 规格标识和镜像 UUID，需要按你可用的资源填写，不能照抄占位符 |
+| `cuda_min` | CUDA 驱动兼容下限，例如 `118` 表示 11.8；不是指定安装 CUDA |
+| `gpus`、`disk_gb` | GPU 数量 1–4，系统盘额外扩容 0–500 GB |
+| `region` | 允许使用的地域代码数组；空数组让平台按规格调度 |
+| `allow_create` | 是否允许创建付费 Pro 实例，默认关闭 |
 | `token_env` | 仅使用环境变量方式时添加；填写变量名，不填令牌 |
-| `allow_discovery` | 是否允许查询列表与状态；AutoDL 任务准备需要查询状态，因此实际使用时必须为 true |
+| `allow_discovery` | 是否允许查询列表、状态和脱敏连接详情；自动创建和任务准备均需要为 true |
 | `allow_start` | 是否允许插件启动实例；允许查询不代表允许开机 |
-| `start_on_prepare` | 是否在准备阶段自动启动；必须同时启用 `allow_start` 才能执行启动 |
+| `start_on_prepare` | 仅已有模式使用；创建模式创建即开机，恢复已关机的原实例需 `allow_start` |
 | `allow_stop` | 是否允许插件关机，与开机权限独立 |
 | `running_status` | CLI 返回的运行中状态原值；`running` 只是示例，应按自己的实例返回核对 |
-| `stop_policy` | `leave` 保持原状；`after_archive` 成功归档后尝试关机；`always` 即使归档失败也尝试关机，后两者需 `allow_stop: true` |
-| `ssh.host`、`ssh.port` | 实例实际提供的 SSH 地址与端口，与 CLI 的实例标识无关 |
+| `stop_policy` | 仅已有模式使用；创建模式固定自动关机，必须允许关机，不提供“创建后放任运行”的选项 |
+| `startup_seconds` | 等待创建后的实例达到运行状态的期限，1–3600 秒，默认 300 秒 |
+| `shutdown_seconds` | 后台等待关机或创建结果核对的期限，1–3600 秒，默认 120 秒；到期仍不明确时通知人工核对 |
+| `stopped_statuses` | 平台关机状态原值列表，默认 `["shutdown","stopped"]`；确认命中后才标记已关机 |
+| `ssh.host`、`ssh.port` | 已有模式手填；创建模式从新实例的脱敏连接详情获取 |
 | `ssh.identity_file` | 本机 SSH 私钥文件路径，不是私钥内容 |
 | `ssh.root` | 你已授权使用的远端专用实验根目录，使用绝对路径 |
-| `ssh.allow_execute` | 是否允许上传、预检和运行已批准实验；首次配置先保留 false |
+| `ssh.allow_execute` | 是否允许上传、预检和运行已批准实验；创建模式必须为 true，以免创建无法使用的实例 |
+| `ssh.accept_new_host_keys` | 默认 false；示例明确允许首次信任新实例的主机密钥，仍拒绝已知密钥变更；不启用时需预先信任实际连接地址 |
 
 插件的 SSH 使用非交互密钥认证或 SSH agent，不支持让 Bot 代填密码。
-需要预先配置可用的公钥登录和受信任主机密钥。
+新建实例使用的镜像需预先配置公钥登录和实验依赖。
+本地私钥须与镜像中的公钥对应；插件不自动从返回的密码切换为密码认证。
 用户 SSH 配置被禁用，因此主机、端口、用户名和密钥引用要在插件中明确填写。
 远端需具备 POSIX shell、Python 3.10+ 和 SCP，不需要 harness。
 
-## 5. 开始使用与授权开关
+### 使用已有实例
 
-保存设置并重新加载插件，先发送 `research new 你的研究想法`，检查澄清和方案讨论。
-`ssh.allow_execute: false` 时可以讨论，但不能执行实验。
-插件目前没有独立的 `research autodl list/start/stop` 消息命令；
-实例管理在任务准备和收尾流程中按配置触发。
-
-准备实际执行时，确认 SSH 和实验目录可用，再将 `ssh.allow_execute` 改为 true。
-如果实例由你提前手动开机，保留：
+不希望自动创建时，按 README 的已有实例示例设置 `mode: "existing"`、
+`instance` 及 SSH 地址。实例由你提前开机时，可关闭 `allow_start`，
+并设置 `start_on_prepare: false`。如果希望归档完成后自动关机，明确设置：
 
 ```json
 {
+  "mode": "existing",
   "allow_discovery": true,
   "allow_start": false,
-  "allow_stop": false,
-  "start_on_prepare": false,
-  "stop_policy": "leave"
-}
-```
-
-以上是 `autodl` 对象中的权限部分。已有实例必须实际处于可连接状态。
-当你明确希望插件自动开机、在成功归档后关机时，可以改为：
-
-```json
-{
-  "allow_discovery": true,
-  "allow_start": true,
   "allow_stop": true,
-  "start_on_prepare": true,
+  "start_on_prepare": false,
   "stop_policy": "after_archive"
 }
 ```
 
-开启开机权限可能产生平台费用。请先确认实例与平台计费规则。
-只有当前版本的实验方案获批后，任务才进入平台准备阶段。
-普通 SSH 或 AutoDL 的任何通用流程都不能突破 README 中对组内共享服务器的固定限制。
+以上只是 `autodl` 对象中的模式与权限部分，仍需 CLI、实例标识和 SSH 等完整配置。
+
+## 5. 开始使用与自动收尾
+
+保存设置并重新加载插件，发送 `research new 你的研究想法`。
+模型根据实验需求从 `resource_profiles` 中选择适用档位，
+方案包含选择理由、确切规格和“创建后自动关机”的生命周期约定。
+如果没有合适档位，需要修改配置或方案，不能擅自扩容或创建不在允许列表内的资源。
+
+查看方案后，用 `research approve TASK_ID 版本号` 批准。
+插件随后创建并等待实例启动，获取脱敏连接地址，通过 SSH 执行，
+归档证据并关机。`research status TASK_ID` 显示实验进程与实例的独立状态。
+用户用 `research stop TASK_ID` 停止任务时，也会尽力保存当前证据并关机。
+
+任务暂停、失败或需要用户输入时，自动创建的实例同样进入关机流程。
+继续任务时复用原实例，按需重新启动，不再创建第二个实例。
+没有获得有效实验证据的任务会保留缺口，不因实例已关机就声称实验成功。
+
+创建前持久化唯一名称和提交意图。创建响应丢失或 Bot 重启时，
+按该名称分页查找原实例，不重复创建。查不到或出现多个匹配会保留不确定状态并提示人工核对。
+关机也保存提交意图；请求结果不明时只查询状态，不盲目重复提交。
+平台未确认关机时不会报告完整完成。此时请在控制台核对实例，并继续任务以重新查询状态。
+
+关闭实例不等于释放或删除数据，存储等费用以平台规则为准。
+若本机 Bot 长时间离线、凭据失效或网络不可达，插件无法保证及时关机，
+应在 AutoDL 控制台核对；重启后会恢复核对流程。
+插件没有独立的 `research autodl create/list/start/stop` 消息命令，
+生命周期操作由任务流程触发。
+任何流程都不能突破 README 中对组内共享服务器的固定限制。
 
 ## 验证范围与参考
 
-本插件已完成 AutoDL 适配的离线协议与策略测试。
+本插件已完成 AutoDL 适配的离线协议与策略测试，包括创建、资源档位批准、
+响应丢失与重启恢复、失败和取消收尾、脱敏连接详情和关机确认。
 本次开发未使用真实 AutoDL 凭据或获准操作真实实例，
-因此实例查询、开关机、SSH 执行和计费行为仍有真实验证缺口。
+因此实例创建与查询、开关机、SSH 执行和计费行为仍有真实验证缺口。
 本教程中的命令是供用户自行配置使用的说明，不代表开发过程已执行这些命令。
 
 - [上游使用说明](https://github.com/saurlax/autodl-cli#readme)

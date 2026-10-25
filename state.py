@@ -171,6 +171,9 @@ class Store:
                     "result",
                 )
             }
+            for key in ("allocation", "instance_state", "instance_stop"):
+                if key in task:
+                    document[key] = task[key]
             staging = directory / "experiment.md.tmp"
             staging.write_text(
                 "# Research task\n\n```json\n"
