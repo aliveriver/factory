@@ -6,6 +6,7 @@ from astrbot.api import AstrBotConfig, star
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.core.star.filter.command import GreedyStr
 
+from .configuration import read_configuration
 from .state import Store
 from .workflow import Workflow
 
@@ -30,8 +31,7 @@ class Main(star.Star):
     def __init__(self, context: star.Context, config: AstrBotConfig):
         super().__init__(context)
         self.context = context
-        settings = json.loads(config.get("settings_json", "{}"))
-        self.allowed = set(config.get("allowed_users", []))
+        settings, self.allowed = read_configuration(config)
         # This checkout exposes astrbot_path through StarTools, rather than the
         # older path_utils module named in the repository development guidance.
         self.store = Store(star.StarTools.get_data_dir("astrbot_plugin_research"))

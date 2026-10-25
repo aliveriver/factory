@@ -1,18 +1,622 @@
 {
-  "allowed_users": {
-    "description": "谁可以使用（选填，管理员默认可用）",
-    "hint": "**自己使用：留空即可，AstrBot 管理员已有权限。**\n需要开放给其他用户时，每个列表项填写一个身份，例如 `[\"my-telegram\",\"12345\"]`。前一项是 AstrBot 中的平台 ID，后一项是用户 ID；两项都用双引号。不要只填 QQ 号，也不要填整个列表。这里只设置使用权限，不填写 API Key 或 AutoDL 令牌。",
+  "config_mode": {
+    "description": "① 配置来源",
+    "type": "string",
+    "default": "auto",
+    "hint": "新安装直接填写下方表单即可。自动模式：旧版 JSON 非空时继续使用旧配置，否则使用表单。已有 JSON 用户切换前请填好表单，再明确选择“可视化表单”；不会将两套执行权限混合。保存后重新加载插件生效。",
     "obvious_hint": true,
+    "options": [
+      "auto",
+      "visual",
+      "json"
+    ],
+    "labels": [
+      "自动（旧 JSON 非空时优先兼容）",
+      "可视化表单（使用下方设置）",
+      "旧版 JSON（高级兼容方式）"
+    ]
+  },
+  "users": {
+    "description": "② 谁可以使用（管理员默认可用）",
+    "type": "template_list",
+    "default": [],
+    "hint": "只给自己使用且是 AstrBot 消息管理员时留空。",
+    "templates": {
+      "user": {
+        "name": "允许的消息用户",
+        "display_item": "sender_id",
+        "items": {
+          "platform_id": {
+            "description": "AstrBot 平台 ID",
+            "type": "string",
+            "default": "",
+            "hint": "填写 AstrBot 中配置的平台 ID，例如 my-telegram；不是平台类型名称或会话回复地址。"
+          },
+          "sender_id": {
+            "description": "该平台上的用户 ID",
+            "type": "string",
+            "default": "",
+            "hint": "例如 QQ 号或 Telegram 用户 ID；直接填写文本，无需 JSON。"
+          }
+        }
+      }
+    }
+  },
+  "participants": {
+    "description": "③ 参与者与阶段分工",
+    "type": "template_list",
+    "default": [],
+    "hint": "点击添加，选择 Codex 或 DeepSeek；每位成员填写模型，勾选负责阶段。可以添加多位使用相同 harness、不同模型的成员。模型不使用 AstrBot 默认聊天提供商；其认证由本机 harness 管理。",
+    "obvious_hint": true,
+    "templates": {
+      "codex": {
+        "name": "Codex 成员",
+        "display_item": "name",
+        "items": {
+          "name": {
+            "description": "成员名称（唯一）",
+            "type": "string",
+            "default": "",
+            "hint": "例如 builder 或 reviewer；任务记录使用此名称识别成员。"
+          },
+          "model": {
+            "description": "模型标识（必填）",
+            "type": "string",
+            "default": "",
+            "hint": "填写你明确选择且账号可用的 Codex 模型标识；不会自动替换模型，也不使用 AstrBot 默认聊天模型。"
+          },
+          "provider": {
+            "description": "模型提供商（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "通常留空。仅使用自定义 model_provider 时填写对应提供商标识。"
+          },
+          "role": {
+            "description": "职责说明",
+            "type": "text",
+            "default": "",
+            "hint": "例如：编写实现、检查实验公平性、汇总结果。"
+          },
+          "stages": {
+            "description": "负责阶段（可多选）",
+            "type": "list",
+            "default": [
+              "research",
+              "design",
+              "implement",
+              "analyze",
+              "summary"
+            ],
+            "hint": "五个阶段都必须有人负责；可由同一人承担全部阶段。",
+            "options": [
+              "research",
+              "design",
+              "implement",
+              "analyze",
+              "summary"
+            ],
+            "labels": [
+              "想法完善与检索",
+              "实验设计讨论",
+              "编写实现",
+              "公平性检查与分析",
+              "最终汇总"
+            ],
+            "render_type": "checkbox"
+          },
+          "order": {
+            "description": "发言顺序（数值越小越靠前）",
+            "type": "int",
+            "default": 10,
+            "hint": "每个阶段按此顺序执行；同值按成员卡片排列顺序。最终汇总使用被勾选成员中排序最靠前的一位。"
+          },
+          "program": {
+            "description": "本机启动程序（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "留空使用 codex。不在 PATH 中时填 codex 程序的绝对路径。不要填写带参数的整条命令。"
+          },
+          "arguments": {
+            "description": "启动参数（每项一个，通常无需改）",
+            "type": "list",
+            "default": [],
+            "hint": "留空使用 app-server。如需修改，每项只填一个参数，无需引号或 JSON 数组。"
+          },
+          "web_search": {
+            "description": "联网搜索方式",
+            "type": "string",
+            "default": "disabled",
+            "options": [
+              "disabled",
+              "cached",
+              "live"
+            ],
+            "labels": [
+              "关闭",
+              "使用缓存",
+              "实时联网"
+            ]
+          }
+        }
+      },
+      "deepseek": {
+        "name": "DeepSeek Harness 成员",
+        "display_item": "name",
+        "items": {
+          "name": {
+            "description": "成员名称（唯一）",
+            "type": "string",
+            "default": "",
+            "hint": "例如 builder 或 reviewer；任务记录使用此名称识别成员。"
+          },
+          "model": {
+            "description": "模型标识（必填）",
+            "type": "string",
+            "default": "",
+            "hint": "填写你明确选择且账号可用的模型标识；不会自动替换模型。DeepSeek 可配合下方提供商生成选择值，也可在提供商留空时粘贴原始 ACP 选择值。"
+          },
+          "provider": {
+            "description": "模型提供商（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "DeepSeek：填写 ACP 返回的提供商标识，并在模型框填写模型标识，插件自动组合，无需编写 JSON；留空时模型框原样作为 ACP 选择值。Codex：仅自定义 model_provider 时填写。"
+          },
+          "role": {
+            "description": "职责说明",
+            "type": "text",
+            "default": "",
+            "hint": "例如：编写实现、检查实验公平性、汇总结果。"
+          },
+          "stages": {
+            "description": "负责阶段（可多选）",
+            "type": "list",
+            "default": [
+              "research",
+              "design",
+              "implement",
+              "analyze",
+              "summary"
+            ],
+            "hint": "五个阶段都必须有人负责；可由同一人承担全部阶段。",
+            "options": [
+              "research",
+              "design",
+              "implement",
+              "analyze",
+              "summary"
+            ],
+            "labels": [
+              "想法完善与检索",
+              "实验设计讨论",
+              "编写实现",
+              "公平性检查与分析",
+              "最终汇总"
+            ],
+            "render_type": "checkbox"
+          },
+          "order": {
+            "description": "发言顺序（数值越小越靠前）",
+            "type": "int",
+            "default": 10,
+            "hint": "每个阶段按此顺序执行；同值按成员卡片排列顺序。最终汇总使用被勾选成员中排序最靠前的一位。"
+          },
+          "program": {
+            "description": "本机启动程序（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "留空使用 dsh。不在 PATH 中时填绝对路径；Windows 下 DeepSeek 请填 node.exe 路径。不要填写带参数的整条命令。"
+          },
+          "arguments": {
+            "description": "启动参数（每项一个，通常无需改）",
+            "type": "list",
+            "default": [],
+            "hint": "留空使用 --profile 和 acp。Windows 的 DeepSeek 使用 Node 时，依次添加 DSH 的 lib/bin.js 绝对路径、--profile、acp；无需引号或 JSON 数组。"
+          }
+        }
+      }
+    }
+  },
+  "agents_file": {
+    "description": "④ 用户 AGENTS.md 文件（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "填写已有约束文件的绝对路径，Windows 可直接填写 C:/research/AGENTS.md，无需双反斜杠。文件由你维护；实验目标、方案、分工、指标另存任务文档。"
+  },
+  "platform": {
+    "description": "⑤ 实验执行平台",
+    "type": "string",
+    "default": "local",
+    "hint": "选择后显示对应设置组。切换平台会保留其他组的设置；保存表单不会联网或运行实验。",
+    "options": [
+      "local",
+      "ssh",
+      "autodl"
+    ],
+    "labels": [
+      "本机运行",
+      "已有 SSH 服务器",
+      "AutoDL 云实例"
+    ],
+    "obvious_hint": true
+  },
+  "local": {
+    "description": "本机执行设置",
+    "type": "object",
+    "condition": {
+      "platform": "local"
+    },
+    "hint": "",
+    "items": {
+      "allow_execute": {
+        "description": "允许本机执行已批准的实验",
+        "type": "bool",
+        "default": false,
+        "hint": "只讨论方案时保持关闭。开启后仍需先批准实验方案。"
+      }
+    }
+  },
+  "ssh": {
+    "description": "已有 SSH 服务器设置",
+    "type": "object",
+    "condition": {
+      "platform": "ssh"
+    },
+    "hint": "",
+    "items": {
+      "host": {
+        "description": "服务器地址",
+        "type": "string",
+        "default": "",
+        "hint": "填写获准运行实验的主机名或 IP。共享组内服务器 10.8.176.151 禁止使用此执行接口。"
+      },
+      "port": {
+        "description": "SSH 端口",
+        "type": "int",
+        "default": 22
+      },
+      "user": {
+        "description": "SSH 用户名",
+        "type": "string",
+        "default": ""
+      },
+      "identity_file": {
+        "description": "SSH 私钥文件路径（可选）",
+        "type": "string",
+        "default": "",
+        "hint": "仅填写本机文件路径，例如 C:/Users/你的用户名/.ssh/id_ed25519；留空使用 SSH agent 或默认密钥。不要粘贴私钥或密码。"
+      },
+      "root": {
+        "description": "专用实验根目录（远端绝对路径）",
+        "type": "string",
+        "default": "",
+        "hint": "仅使用你拥有且获准写入的专用目录，例如 /home/your-user/astrbot-experiments。不会在远端安装 harness。"
+      },
+      "python": {
+        "description": "远端 Python 命令",
+        "type": "string",
+        "default": "python3",
+        "hint": "实验镜像或服务器需事先准备 Python 和所需依赖。"
+      },
+      "allow_execute": {
+        "description": "允许通过 SSH 上传并执行已批准的实验",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后仍需逐任务批准方案；保存配置不会访问服务器。"
+      },
+      "accept_new_host_keys": {
+        "description": "允许首次接受新的 SSH 主机密钥",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭，需提前确认 known_hosts。新建云实例可按需开启；已有主机密钥变更仍会被拒绝。"
+      }
+    }
+  },
+  "autodl": {
+    "description": "AutoDL 设置（CLI 管理实例，SSH 运行实验）",
+    "type": "object",
+    "condition": {
+      "platform": "autodl"
+    },
+    "hint": "默认不授予任何查询、创建、开机、关机或实验执行权限。[安装与配置教程](https://github.com/aliveriver/factory/blob/main/docs/autodl.md)",
+    "items": {
+      "program": {
+        "description": "本机 AutoDL CLI 路径",
+        "type": "string",
+        "default": "autodl",
+        "hint": "例如 C:/Tools/autodl/autodl.exe；仅使用 saurlax/autodl-cli。本插件不自动安装 CLI。"
+      },
+      "mode": {
+        "description": "实例使用方式",
+        "type": "string",
+        "default": "create",
+        "hint": "自动创建仅支持 Pro。需配置下方资源档位和独立权限；方案获批后才创建。",
+        "options": [
+          "create",
+          "existing"
+        ],
+        "labels": [
+          "按实验方案自动创建，用完自动关机",
+          "使用我已有的实例"
+        ]
+      },
+      "kind": {
+        "description": "实例类型",
+        "type": "string",
+        "default": "pro",
+        "options": [
+          "pro",
+          "container"
+        ],
+        "labels": [
+          "Container Instance Pro（开发者令牌）",
+          "普通容器（网页登录令牌，仅已有实例）"
+        ]
+      },
+      "token_env": {
+        "description": "令牌环境变量名（可选）",
+        "type": "string",
+        "default": "",
+        "hint": "只填变量名，例如 MY_PRIVATE_AUTODL_TOKEN，绝不填写令牌内容。使用 CLI 系统凭据存储时留空。"
+      },
+      "instance": {
+        "description": "已有实例 ID（自动创建时留空）",
+        "type": "string",
+        "default": "",
+        "hint": "使用已有实例模式时填写准确标识，不能填写名称或 SSH 地址。"
+      },
+      "allow_discovery": {
+        "description": "允许查询实例状态和连接地址",
+        "type": "bool",
+        "default": false
+      },
+      "allow_create": {
+        "description": "允许按已批准方案创建付费 Pro 实例",
+        "type": "bool",
+        "default": false,
+        "hint": "此项会授权付费资源创建；还需查询、关机、SSH 执行权限。默认关闭。"
+      },
+      "allow_start": {
+        "description": "允许启动实例",
+        "type": "bool",
+        "default": false,
+        "hint": "继续任务时可用于启动该任务已分配的同一实例。"
+      },
+      "allow_stop": {
+        "description": "允许关机实例",
+        "type": "bool",
+        "default": false,
+        "hint": "自动创建模式必须开启；自动关机只停止计算，不释放或删除实例数据。"
+      },
+      "start_on_prepare": {
+        "description": "已有实例：准备实验时自动开机",
+        "type": "bool",
+        "default": false,
+        "hint": "仅已有实例模式生效，并需开启允许启动。"
+      },
+      "stop_policy": {
+        "description": "已有实例：结束时的关机策略",
+        "type": "string",
+        "default": "leave",
+        "hint": "仅已有实例模式生效。自动创建的任务专属实例固定在结束、失败、暂停、取消时尝试关机，不受此项影响；结果不明会核对并通知。",
+        "options": [
+          "leave",
+          "after_archive",
+          "always"
+        ],
+        "labels": [
+          "保持当前状态（不自动关机）",
+          "成功归档后关机",
+          "无论成功或失败都尝试关机"
+        ]
+      },
+      "startup_seconds": {
+        "description": "等待启动的最长时间（秒）",
+        "type": "int",
+        "default": 300
+      },
+      "shutdown_seconds": {
+        "description": "等待关机确认的最长时间（秒）",
+        "type": "int",
+        "default": 120
+      },
+      "running_status": {
+        "description": "CLI 返回的运行中状态值",
+        "type": "string",
+        "default": "running",
+        "hint": "通常无需改动；必须与实际 CLI 状态一致。"
+      },
+      "stopped_statuses": {
+        "description": "CLI 返回的已关机状态值（每项一个）",
+        "type": "list",
+        "default": [
+          "shutdown",
+          "stopped"
+        ]
+      },
+      "resource_profiles": {
+        "description": "允许自动创建的资源档位",
+        "type": "template_list",
+        "default": [],
+        "hint": "自动创建模式至少添加一档。方案会展示所选档位、规格与理由，批准绑定当前方案版本。",
+        "templates": {
+          "profile": {
+            "name": "资源档位",
+            "display_item": "name",
+            "items": {
+              "name": {
+                "description": "档位名称（唯一）",
+                "type": "string",
+                "default": "",
+                "hint": "例如 small；模型只能从你提供的档位中选择，不能自行增加规格。"
+              },
+              "description": {
+                "description": "适用实验说明",
+                "type": "text",
+                "default": "",
+                "hint": "例如小数据集快速验证，依赖和 SSH 公钥已预装。"
+              },
+              "gpu_spec": {
+                "description": "GPU 规格标识（准确值）",
+                "type": "string",
+                "default": "",
+                "hint": "填写 AutoDL CLI 支持的规格标识；不是任意 GPU 展示名称，不预设现货。"
+              },
+              "image": {
+                "description": "预置镜像 ID",
+                "type": "string",
+                "default": "",
+                "hint": "镜像须已准备实验依赖和 SSH 公钥。插件不自动安装依赖或使用密码登录。"
+              },
+              "cuda_min": {
+                "description": "最低 CUDA 版本编码",
+                "type": "int",
+                "default": 118,
+                "hint": "例如 118 表示 11.8；以 CLI 支持的编码为准。"
+              },
+              "gpus": {
+                "description": "GPU 数量",
+                "type": "int",
+                "default": 1
+              },
+              "disk_gb": {
+                "description": "系统盘额外扩容（GB）",
+                "type": "int",
+                "default": 0
+              },
+              "region": {
+                "description": "允许的地域编码（每项一个，可留空）",
+                "type": "list",
+                "default": [],
+                "hint": "填写准确数据中心编码；不预设现货或可用性。"
+              }
+            }
+          }
+        }
+      },
+      "ssh": {
+        "description": "AutoDL 实验 SSH 连接",
+        "type": "object",
+        "hint": "",
+        "items": {
+          "host": {
+            "description": "已有实例 SSH 地址（自动创建时留空）",
+            "type": "string",
+            "default": "",
+            "hint": "自动创建模式由 CLI 获取地址；已有实例需填写控制台给出的 SSH 地址。"
+          },
+          "port": {
+            "description": "已有实例 SSH 端口（自动创建时忽略）",
+            "type": "int",
+            "default": 22
+          },
+          "user": {
+            "description": "SSH 用户名",
+            "type": "string",
+            "default": "root"
+          },
+          "identity_file": {
+            "description": "SSH 私钥文件路径（可选）",
+            "type": "string",
+            "default": "",
+            "hint": "仅填写本机文件路径，例如 C:/Users/你的用户名/.ssh/id_ed25519；留空使用 SSH agent 或默认密钥。不要粘贴私钥或密码。"
+          },
+          "root": {
+            "description": "专用实验根目录（远端绝对路径）",
+            "type": "string",
+            "default": "/root/astrbot-experiments",
+            "hint": "仅使用你拥有且获准写入的专用目录，例如 /home/your-user/astrbot-experiments。不会在远端安装 harness。"
+          },
+          "python": {
+            "description": "远端 Python 命令",
+            "type": "string",
+            "default": "python3",
+            "hint": "实验镜像或服务器需事先准备 Python 和所需依赖。"
+          },
+          "allow_execute": {
+            "description": "允许通过 SSH 上传并执行已批准的实验",
+            "type": "bool",
+            "default": false,
+            "hint": "开启后仍需逐任务批准方案；保存配置不会访问服务器。"
+          },
+          "accept_new_host_keys": {
+            "description": "允许首次接受新的 SSH 主机密钥",
+            "type": "bool",
+            "default": false,
+            "hint": "默认关闭，需提前确认 known_hosts。新建云实例可按需开启；已有主机密钥变更仍会被拒绝。"
+          }
+        }
+      }
+    }
+  },
+  "concurrency": {
+    "description": "⑥ 同时推进的任务数",
+    "type": "int",
+    "default": 1,
+    "hint": "首次使用建议保持 1。"
+  },
+  "limits": {
+    "description": "⑦ 每个任务的资源限制",
+    "type": "object",
+    "hint": "",
+    "items": {
+      "model_calls": {
+        "description": "最多 harness 调用轮次",
+        "type": "int",
+        "default": 30
+      },
+      "discussion_rounds": {
+        "description": "设计讨论轮数",
+        "type": "int",
+        "default": 2
+      },
+      "wall_seconds": {
+        "description": "任务活动时间上限（秒）",
+        "type": "int",
+        "default": 3600
+      },
+      "run_seconds": {
+        "description": "单次实验运行上限（秒）",
+        "type": "int",
+        "default": 600
+      },
+      "repair_rounds": {
+        "description": "程序修复次数上限",
+        "type": "int",
+        "default": 5,
+        "hint": "仅修复程序错误，不自动调参追求正结果。"
+      },
+      "network_retries": {
+        "description": "网络错误重试上限",
+        "type": "int",
+        "default": 2,
+        "hint": "不会重复提交结果不明的实验或实例创建。"
+      },
+      "archive_bytes": {
+        "description": "单次产物归档上限（字节）",
+        "type": "int",
+        "default": 20000000,
+        "hint": "默认约 20 MB。"
+      },
+      "tokens": {
+        "description": "观测 token 上限（0 表示不启用）",
+        "type": "int",
+        "default": 0,
+        "hint": "无需估算预算，可保持 0；此项不是服务商侧硬上限。"
+      }
+    }
+  },
+  "allowed_users": {
+    "description": "高级兼容：旧版用户身份列表",
     "type": "list",
-    "default": []
+    "default": [],
+    "hint": "已有条目继续生效。新增用户优先使用上方卡片。撤销旧授权时也需删除这里的旧条目。"
   },
   "settings_json": {
-    "description": "实验配置（必填，点击右侧全屏按钮编辑）",
-    "hint": "**首次配置：按[配置教程](https://github.com/aliveriver/factory/blob/main/docs/configuration.md)复制 README 中的最小配置，再修改模型和启动命令。空的 `{}` 无法创建任务。**\n`participants`＝谁参与、用哪个模型；`assignments`＝各阶段由谁负责；`agents_file`＝你的 AGENTS.md 路径（选填）；`platform`＝本次选择的平台名称，须与 `platforms` 中的名称一致；`limits`＝调用次数和运行时长上限。\n**先保留 `allow_execute: false`，仅讨论方案；准备运行已批准的实验时再授权。** AutoDL 可选择按资源档位自动创建 Pro 实例，用完自动关机；需配置 `mode: \"create\"`、`resource_profiles`，并授权创建、查询、关机和 SSH 执行。普通容器仅支持已有实例。详见 [AutoDL 使用教程](https://github.com/aliveriver/factory/blob/main/docs/autodl.md)。这里只填配置和凭据引用，不粘贴令牌、密码或私钥。Windows 路径建议使用 `/`。",
-    "obvious_hint": true,
+    "description": "高级兼容：旧版实验 JSON（新用户无需填写）",
     "type": "text",
+    "default": "{}",
+    "hint": "仅“旧版 JSON”，或“自动”且此处非空时使用。可视化模式下忽略此项。两套设置不自动互相转换，也不叠加权限；旧 JSON 原样保留。",
     "editor_mode": true,
-    "editor_language": "json",
-    "default": "{}"
+    "editor_language": "json"
   }
 }
