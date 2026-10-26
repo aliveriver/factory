@@ -8,6 +8,7 @@ https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/acp/acp
 import asyncio
 import contextlib
 import json
+import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -249,6 +250,44 @@ class CodexHarness:
             "capabilities": self.capabilities,
         }
 
+    async def discover_models(self) -> list[dict]:
+        """Discover models without starting a research thread.
+
+        Returns:
+            Models advertised by the local Codex app-server.
+        """
+        await self.rpc.start()
+        await self.rpc.call(
+            "initialize",
+            {
+                "clientInfo": {"name": "astrbot_research", "version": "0.1.0"},
+                "capabilities": {"experimentalApi": False},
+            },
+        )
+        await self.rpc.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        cursor = None
+        models = []
+        while True:
+            response = await self.rpc.call(
+                "model/list", {"cursor": cursor, "limit": 100}
+            )
+            for item in response.get("data", []):
+                if not isinstance(item, dict):
+                    continue
+                value = item.get("value") or item.get("model") or item.get("slug")
+                if not isinstance(value, str) or not value:
+                    continue
+                models.append(
+                    {
+                        "value": value,
+                        "name": item.get("name") or item.get("displayName") or value,
+                        "description": item.get("description", ""),
+                    }
+                )
+            cursor = response.get("nextCursor")
+            if not cursor:
+                return models
+
     async def turn(self, prompt: str, timeout: float | None) -> dict:
         """Continue the current session and await its correlated completion.
 
@@ -467,6 +506,40 @@ class DeepSeekHarness:
             "capabilities": self.capabilities,
         }
 
+    async def discover_models(self) -> list[dict]:
+        """Discover ACP model choices without selecting or prompting one.
+
+        Returns:
+            Flattened model choices advertised by the local ACP session.
+        """
+        await self.rpc.start()
+        response = await self.rpc.call(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientInfo": {"name": "astrbot_research", "version": "0.1.0"},
+                "clientCapabilities": {},
+            },
+        )
+        self.capabilities["resume"] = "resume" in response.get(
+            "agentCapabilities", {}
+        ).get("sessionCapabilities", {})
+        session = await self.rpc.call(
+            "session/new", {"cwd": str(self.workspace), "mcpServers": []}
+        )
+        options = session.get("configOptions", [])
+        model_option = next(
+            (option for option in options if option.get("id") == "model"), {}
+        )
+        choices = []
+        for group in model_option.get("options", []):
+            choices.extend(
+                option
+                for option in group.get("options", [group])
+                if isinstance(option, dict) and option.get("value")
+            )
+        return choices
+
     async def turn(self, prompt: str, timeout: float | None) -> dict:
         """Submit another prompt to the same ACP session.
 
@@ -592,3 +665,48 @@ def make_harness(config: dict, workspace: Path, emit: EventSink):
     if kind == "deepseek":
         return DeepSeekHarness(config, workspace, emit)
     raise ValueError("Only codex and deepseek are production harnesses")
+
+
+async def discover_harness_models(
+    kind: str, config: dict, workspace: Path | None = None
+) -> list[dict]:
+    """Discover selectable models from a local harness process.
+
+    Args:
+        kind: Production harness identifier.
+        config: Local command configuration without secrets.
+        workspace: Optional working directory for the harness process.
+
+    Returns:
+        JSON-safe model choices advertised by the harness.
+
+    Raises:
+        ValueError: If the harness kind or command is invalid.
+    """
+    if kind not in {"codex", "deepseek"}:
+        raise ValueError("Only codex and deepseek model discovery is supported")
+    command = config.get("command")
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(
+            not isinstance(item, str) or not item or "\x00" in item for item in command
+        )
+    ):
+        raise ValueError("Harness command must be a nonempty argv list")
+
+    async def _unused(_event: dict) -> None:
+        return None
+
+    if workspace is None:
+        with tempfile.TemporaryDirectory(prefix="astrbot-research-discovery-") as root:
+            adapter = make_harness(config, Path(root), _unused)
+            try:
+                return await adapter.discover_models()
+            finally:
+                await adapter.close()
+    adapter = make_harness(config, workspace, _unused)
+    try:
+        return await adapter.discover_models()
+    finally:
+        await adapter.close()

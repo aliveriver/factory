@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>科研连接与模型设置</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">ASTRBOT RESEARCH</p>
+        <h1>连接与模型设置</h1>
+        <p class="lede">主动读取远端 Python 环境，或从本机 Harness 获取实际可用的模型选项。</p>
+      </header>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">REMOTE RUNTIME</p>
+            <h2>SSH 远端环境</h2>
+          </div>
+          <span class="badge">只读探测</span>
+        </div>
+        <p class="note">只读取系统、Python 和已安装分发包，不安装依赖、不启动 Harness、不运行实验。</p>
+        <form id="ssh-form" class="form-grid">
+          <label class="wide">本机 SSH 配置<select id="ssh-profile"><option value="">手动填写，或选择 ~/.ssh/config 中的主机</option></select></label>
+          <label>地址<input name="host" required placeholder="example.org" /></label>
+          <label>端口<input name="port" type="number" min="1" max="65535" value="22" /></label>
+          <label>用户名<input name="user" required placeholder="research" /></label>
+          <label>Python 命令<input name="python" value="python3" /></label>
+          <label class="wide">SSH 私钥路径（可选）<input name="identity_file" placeholder="C:/Users/you/.ssh/id_ed25519" /></label>
+          <label class="wide">远端专用目录（仅用于保存配置）<input name="root" value="/home/research/astrbot-experiments" /></label>
+          <div class="actions wide">
+            <button type="submit">读取 SSH 环境</button>
+            <button type="button" class="secondary" id="save-ssh">读取并写入 SSH 设置</button>
+          </div>
+        </form>
+        <pre id="ssh-result" class="result">尚未读取</pre>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">LOCAL HARNESS</p>
+            <h2>Harness 模型</h2>
+          </div>
+          <span class="badge accent">本机运行</span>
+        </div>
+        <p class="note">探测会在本机启动一次 Harness，读取协议返回的模型列表后立即关闭。</p>
+        <form id="harness-form" class="form-grid">
+          <label>Harness<select name="kind"><option value="codex">Codex</option><option value="deepseek">DeepSeek Harness</option></select></label>
+          <label>成员名称<input name="name" value="builder" required /></label>
+          <label class="wide">本机启动程序（可选）<input name="program" placeholder="留空使用 codex 或 dsh" /></label>
+          <label class="wide">启动参数（JSON 数组）<input name="arguments" placeholder='例如 ["app-server"]' /></label>
+          <div class="actions wide"><button type="submit">获取可选模型</button></div>
+        </form>
+        <div id="model-list" class="model-list"><span class="muted">尚未获取模型</span></div>
+        <div class="actions"><button type="button" class="secondary" id="save-harness" disabled>保存选中的成员</button></div>
+        <pre id="harness-result" class="result">尚未读取</pre>
+      </section>
+      <p id="toast" class="toast" role="status"></p>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

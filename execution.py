@@ -295,7 +295,7 @@ class SSHExecutor:
 
     kind = "ssh"
 
-    def __init__(self, config: dict, transport=command):
+    def __init__(self, config: dict, transport=command, require_execute: bool = True):
         self.config = config
         self.transport = transport
         host = config.get("host", "")
@@ -309,7 +309,7 @@ class SSHExecutor:
         root = PurePosixPath(config.get("root", ""))
         if not root.is_absolute() or ".." in root.parts or str(root) == "/":
             raise ValueError("SSH root must be a dedicated absolute directory")
-        if not config.get("allow_execute", False):
+        if require_execute and not config.get("allow_execute", False):
             raise PermissionError("SSH execution has not been authorized")
         self.destination = f"{config['user']}@{host}"
         self.root = root
@@ -381,6 +381,38 @@ class SSHExecutor:
         """Check authorized Python availability; never check remote harnesses."""
         response = await self.remote(f"{shlex.quote(self.python)} --version")
         return {"kind": self.kind, "python": response.decode().strip()}
+
+    async def inspect_environment(self) -> dict:
+        """Read remote Python metadata without changing the remote host.
+
+        Returns:
+            Python, operating system, executable and installed distribution metadata.
+
+        Raises:
+            ValueError: If the fixed inspection response is not valid JSON.
+        """
+        script = (
+            "import importlib.metadata,json,platform,sys; "
+            "packages=[]; "
+            "packages=[{'name':d.metadata.get('Name',''),"
+            "'version':d.version} for d in importlib.metadata.distributions() "
+            "if d.metadata.get('Name')]; "
+            "print(json.dumps({'python':sys.version,"
+            "'executable':sys.executable,'platform':platform.platform(),"
+            "'machine':platform.machine(),'packages':packages},"
+            "ensure_ascii=False))"
+        )
+        response = await self.remote(
+            f"{shlex.quote(self.python)} -c {shlex.quote(script)}"
+        )
+        try:
+            result = json.loads(response.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Remote Python inspection returned invalid JSON") from exc
+        if not isinstance(result, dict) or not isinstance(result.get("packages"), list):
+            raise ValueError("Remote Python inspection returned an invalid shape")
+        result["kind"] = self.kind
+        return result
 
     async def upload(self, source: Path, target: PurePosixPath) -> None:
         """Upload one file to the explicitly authorized task root.

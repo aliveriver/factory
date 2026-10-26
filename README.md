@@ -49,6 +49,11 @@ SSH 使用密钥**文件引用**或 SSH agent；AutoDL 使用指定的环境变�
 SSH、AutoDL 只运行实验，本机 harness 负责研究、设计、编程与分析，不在远端安装 harness。
 完整步骤见 [可视化配置教程](docs/configuration.md)。
 
+插件详情页还提供“科研连接与模型设置”：填写 SSH 后点击“读取并写入 SSH 设置”，
+插件会先只读获取远端 Python、系统和已安装分发包；添加 Codex 或 DeepSeek Harness 时，
+点击“获取可选模型”即可从本机协议目录生成可选择的实际模型值。SSH 探测不会安装依赖、
+运行实验或安装远端 Harness；模型发现只启动本机 Harness 并在读取目录后关闭。
+
 ## 旧版 JSON 最小配置（高级兼容方式）
 
 日常配置优先使用表单。只有选择“旧版 JSON”，或“自动”且旧 JSON 非空时，

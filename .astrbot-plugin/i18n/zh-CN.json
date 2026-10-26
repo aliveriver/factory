@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "科研最小实验"
+  },
+  "pages": {
+    "setup": {
+      "title": "科研连接与模型设置",
+      "description": "主动读取 SSH 环境和本机 Harness 可选模型"
+    }
+  }
+}

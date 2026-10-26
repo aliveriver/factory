@@ -1,7 +1,11 @@
 name: astrbot_plugin_research
 display_name: 科研最小实验
 desc: 通过本地 harness 协作完成最小科研实验，支持任务持久化与结果归档。
-version: 0.4.0
+version: 0.5.0
 author: AstrBot Contributors
 astrbot_version: ">=4.10.4"
 repo: https://github.com/aliveriver/factory
+pages:
+  - name: setup
+    title: 科研连接与模型设置
+    description: 主动读取 SSH 环境和本机 Harness 可选模型
