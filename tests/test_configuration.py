@@ -266,7 +266,7 @@ def test_resource_cards_and_create_mode_keep_permissions_closed(form):
     ("patch", "message"),
     [
         ({"participants": [member(), member()]}, "名称不能为空或重复"),
-        ({"participants": [member(model="")]}, "模型标识"),
+        ({"participants": [member(model=123)]}, "模型标识必须是文本"),
         ({"participants": [member(stages=["design"])]}, "想法完善与检索"),
         ({"participants": [member(stages=["invalid"])]}, "有效的负责阶段"),
         ({"participants": [member(arguments="app-server")]}, "启动参数"),
@@ -333,6 +333,13 @@ def test_each_limit_has_an_independent_unlimited_switch(form):
     assert all(
         value is None for value in read_configuration(form)[0]["limits"].values()
     )
+
+
+def test_empty_model_cards_are_ignored_as_unfinished_drafts(form):
+    form["participants"] = [member(model="")]
+    settings, _ = read_configuration(form)
+    assert settings["participants"] == {}
+    assert all(not names for names in settings["assignments"].values())
 
 
 def test_priority_dropdowns_and_per_platform_rules(form):

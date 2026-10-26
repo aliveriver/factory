@@ -2,6 +2,7 @@
 
 import importlib
 import json
+from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -58,3 +59,63 @@ async def test_entry_access_and_task_settings_are_owner_checked(tmp_path, monkey
     results = [r async for r in plugin.research(event, "new not authorized")]
     assert "access is not configured" in results[0]
     assert plugin.store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_harness_save_rejects_unverified_or_empty_model(tmp_path, monkeypatch):
+    """Keep the persisted participant list unchanged when model selection is invalid."""
+    module = importlib.import_module("astrbot_plugin_research.main")
+    monkeypatch.setattr(module.star.StarTools, "get_data_dir", lambda _: tmp_path)
+    config = {
+        "config_mode": "visual",
+        "participants": [
+            {
+                "__template_key": "codex",
+                "name": "existing",
+                "model": "verified-model",
+                "stages": ["research", "design", "implement", "analyze", "summary"],
+            }
+        ],
+        "allowed_users": [],
+    }
+    plugin = module.Main(MagicMock(), config)
+    original = deepcopy(config["participants"])
+
+    async def call(payload):
+        module.request.json = AsyncMock(return_value=payload)
+        response = await plugin.configure_harness()
+        assert response.status_code == 400
+
+    await call(
+        {
+            "kind": "codex",
+            "name": "new",
+            "model": "",
+            "discovery_id": "missing",
+        }
+    )
+    assert config["participants"] == original
+
+    plugin.discovery_cache["known"] = {
+        "kind": "codex",
+        "models": [{"label": "Known", "value": "known-model"}],
+    }
+    await call(
+        {
+            "kind": "codex",
+            "name": "new",
+            "model": "",
+            "discovery_id": "known",
+        }
+    )
+    assert config["participants"] == original
+
+    await call(
+        {
+            "kind": "codex",
+            "name": "new",
+            "model": "unverified-model",
+            "discovery_id": "known",
+        }
+    )
+    assert config["participants"] == original

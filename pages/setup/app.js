@@ -28,6 +28,7 @@ sshProfile.addEventListener("change", () => {
 
 function renderModels(models) {
   discoveredModels = models;
+  discoveryId = "";
   modelList.replaceChildren();
   if (!models.length) {
     modelList.innerHTML = '<span class="muted">Harness 没有返回可选模型</span>';
@@ -108,8 +109,8 @@ harnessForm.addEventListener("submit", async (event) => {
       ...values,
       arguments: argumentsValue,
     });
-    discoveryId = result.discovery_id || "";
     renderModels(result.models || []);
+    discoveryId = result.discovery_id || "";
     harnessResult.textContent = JSON.stringify(result.models || [], null, 2);
     showToast("模型读取完成");
   } catch (error) {
@@ -123,6 +124,11 @@ saveHarness.addEventListener("click", async () => {
   if (!selected) return;
   const values = formObject(harnessForm);
   const model = discoveredModels[Number(selected.value)]?.value;
+  if (!discoveryId || typeof model !== "string" || !model.trim()) {
+    showToast("请先成功获取并选择一个模型");
+    saveHarness.disabled = true;
+    return;
+  }
   try {
     await bridge.apiPost("configure/harness", {
       ...values,

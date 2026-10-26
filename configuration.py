@@ -59,6 +59,18 @@ def read_configuration(config: dict) -> tuple[dict, set[str]]:
     participants, assignments = {}, {phase: [] for phase in PHASES}
     if not isinstance(members, list):
         raise ValueError("参与者必须使用成员卡片列表")
+    # AstrBot's generic schema accepts empty strings. Treat an untouched model
+    # card as a draft so it cannot prevent the plugin from loading.
+    completed_members = []
+    for member in members:
+        if not isinstance(member, dict):
+            raise ValueError("参与者：每项必须是成员卡片")
+        model = member.get("model", "")
+        if not isinstance(model, str):
+            raise ValueError("参与者：模型标识必须是文本")
+        if model.strip():
+            completed_members.append(member)
+    members = completed_members
     for member in members:
         if type(member.get("order", 10)) is not int:
             raise ValueError("参与者：发言顺序必须是整数")

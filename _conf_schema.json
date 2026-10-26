@@ -63,6 +63,7 @@
             "description": "模型标识（必填）",
             "type": "string",
             "default": "",
+            "required": true,
             "hint": "填写你明确选择且账号可用的 Codex 模型标识；不会自动替换模型，也不使用 AstrBot 默认聊天模型。"
           },
           "provider": {
@@ -153,6 +154,7 @@
             "description": "模型标识（必填）",
             "type": "string",
             "default": "",
+            "required": true,
             "hint": "填写你明确选择且账号可用的模型标识；不会自动替换模型。DeepSeek 可配合下方提供商生成选择值，也可在提供商留空时粘贴原始 ACP 选择值。"
           },
           "provider": {

@@ -371,7 +371,12 @@ class Main(star.Star):
         members = [
             item
             for item in members
-            if not isinstance(item, dict) or item.get("name") != name.strip()
+            if not (isinstance(item, dict) and item.get("name") == name.strip())
+            and not (
+                isinstance(item, dict)
+                and isinstance(item.get("model"), str)
+                and not item["model"].strip()
+            )
         ]
         kind = payload["kind"]
         member = {
@@ -387,8 +392,13 @@ class Main(star.Star):
         }
         if kind == "codex":
             member["web_search"] = payload.get("web_search", "disabled")
-        members.append(member)
-        self.config["participants"] = members
+        candidate = dict(self.config)
+        candidate["participants"] = [*members, member]
+        try:
+            read_configuration(candidate)
+        except ValueError as exc:
+            return error_response(f"成员配置未保存：{exc}")
+        self.config["participants"] = candidate["participants"]
         await asyncio.to_thread(self.config.save_config)
         self.discovery_cache.pop(discovery_id, None)
         return json_response({"saved": True, "note": "请重新加载插件使成员设置生效"})
